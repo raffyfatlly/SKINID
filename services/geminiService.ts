@@ -1,12 +1,26 @@
-
 import { GoogleGenAI, Type, Chat } from "@google/genai";
 import { Product, SkinMetrics, UserProfile } from "../types";
 
 // Initialize the Google GenAI client
-// SECURITY: API Key must be provided via environment variable process.env.API_KEY
-// Do NOT hardcode keys here.
+// SECURITY: API Key must be provided via environment variable.
+// We use a safe check to prevent "process is not defined" crashes in Vite/Browser environments.
 const getAI = () => {
-  return new GoogleGenAI({ apiKey: process.env.API_KEY });
+  let apiKey = '';
+  try {
+      // Check for standard Node/Webpack process.env
+      if (typeof process !== 'undefined' && process.env) {
+          apiKey = process.env.API_KEY || '';
+      }
+  } catch (e) {
+      // Ignore ReferenceError if process is not defined
+  }
+  
+  // Fallback for Vite environments if process.env didn't work
+  if (!apiKey && (import.meta as any).env) {
+      apiKey = (import.meta as any).env.VITE_API_KEY || '';
+  }
+
+  return new GoogleGenAI({ apiKey: apiKey });
 };
 
 // --- ERROR HANDLING ---
@@ -441,74 +455,65 @@ export const getBuyingDecision = (product: Product, shelf: Product[], user: User
     
     const isRisky = audit.warnings.length > 0;
     const isRedundant = context.typeCount > 0;
-    const isConflict = context.conflicts.length > 0;
-    const score = audit.adjustedScore;
+    const shelfConflicts = context.conflicts;
+    const existingSameType = shelf.filter(p => p.type === product.type);
+    
+    let comparison = { result: 'EQUAL', reason: '' };
+    if (existingSameType.length > 0) {
+        // Simple score comparison against the best existing product of same type
+        const bestExisting = existingSameType.reduce((prev, current) => (prev.suitabilityScore > current.suitabilityScore) ? prev : current);
+        if (audit.adjustedScore > bestExisting.suitabilityScore + 10) {
+            comparison = { result: 'BETTER', reason: 'Higher suitability score.' };
+        } else if (audit.adjustedScore < bestExisting.suitabilityScore - 10) {
+            comparison = { result: 'WORSE', reason: 'Lower suitability score.' };
+        }
+    }
 
-    let decision: 'BUY' | 'AVOID' | 'SWAP' | 'COMPARE' = 'BUY';
-    let title = "Approved";
-    let description = "Great addition to your routine.";
-    let color = "emerald";
-
-    const existing = shelf.filter(p => p.type === product.type);
+    let verdict = { 
+        decision: 'BUY', 
+        title: 'Great Addition', 
+        description: 'This product fits your needs well.', 
+        color: 'emerald' 
+    };
 
     if (isRisky) {
-        decision = 'AVOID';
-        title = "Not Recommended";
-        description = "Contains ingredients not suitable for your skin.";
-        color = "rose";
-    } else if (isConflict) {
-        decision = 'AVOID';
-        title = "Conflict Detected";
-        description = "Clashes with products currently on your shelf.";
-        color = "amber";
+        verdict = { 
+            decision: 'AVOID', 
+            title: 'Not Recommended', 
+            description: 'Contains ingredients that may conflict with your skin profile.', 
+            color: 'rose' 
+        };
+    } else if (shelfConflicts.length > 0) {
+        verdict = { 
+            decision: 'CAUTION', 
+            title: 'Routine Conflict', 
+            description: 'Safe to use, but conflicts with other products in your routine.', 
+            color: 'amber' 
+        };
     } else if (isRedundant) {
-        const bestExisting = existing.reduce((prev, current) => {
-             const prevScore = auditProduct(prev, user).adjustedScore;
-             const currScore = auditProduct(current, user).adjustedScore;
-             return (prevScore > currScore) ? prev : current;
-        }, existing[0] || product);
-
-        const existingScore = bestExisting ? auditProduct(bestExisting, user).adjustedScore : 0;
-
-        if (score > existingScore + 15) { 
-            decision = 'SWAP';
-            title = "Upgrade Found";
-            description = `Significantly better than your current ${product.type.toLowerCase()}.`;
-            color = "emerald";
+        if (comparison.result === 'BETTER') {
+            verdict = { 
+                decision: 'SWAP', 
+                title: 'Upgrade Opportunity', 
+                description: `Better match than your current ${product.type.toLowerCase()}.`, 
+                color: 'emerald' 
+            };
+        } else if (comparison.result === 'WORSE') {
+            verdict = { 
+                decision: 'SKIP', 
+                title: 'Downgrade', 
+                description: `Your current ${product.type.toLowerCase()} works better for you.`, 
+                color: 'zinc' 
+            };
         } else {
-            decision = 'COMPARE';
-            title = "Duplicate Step";
-            description = `You already have a ${product.type.toLowerCase()}.`;
-            color = "zinc";
+             verdict = { 
+                decision: 'COMPARE', 
+                title: 'Similar Match', 
+                description: `Performs similarly to your current products.`, 
+                color: 'zinc' 
+            };
         }
-    } else if (score < 70) {
-        decision = 'AVOID';
-        title = "Low Match";
-        description = "There are better options for your metrics.";
-        color = "amber";
     }
 
-    let comparisonResult = 'EQUAL';
-    if (decision === 'SWAP') {
-        comparisonResult = 'BETTER';
-    } else if (decision === 'COMPARE') {
-        const bestExisting = existing.reduce((prev, current) => {
-             const prevScore = auditProduct(prev, user).adjustedScore;
-             const currScore = auditProduct(current, user).adjustedScore;
-             return (prevScore > currScore) ? prev : current;
-        }, existing[0] || product);
-        
-        const existingScore = bestExisting ? auditProduct(bestExisting, user).adjustedScore : 0;
-        
-        if (score < existingScore) comparisonResult = 'WORSE';
-        else if (score > existingScore) comparisonResult = 'BETTER';
-    }
-
-    return {
-        verdict: { decision, title, description, color },
-        audit,
-        shelfConflicts: context.conflicts,
-        existingSameType: existing,
-        comparison: { result: comparisonResult } 
-    };
+    return { verdict, audit, shelfConflicts, existingSameType, comparison };
 };
