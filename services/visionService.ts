@@ -13,7 +13,7 @@ export const validateFrame = (
   height: number,
   lastFacePos?: { cx: number, cy: number }
 ): { isGood: boolean; message: string; facePos?: { cx: number, cy: number }; instruction?: string; status: 'OK' | 'WARNING' | 'ERROR' } => {
-  const { cx, cy, faceWidth } = detectFaceBounds(ctx, width, height);
+  const { cx, cy, faceWidth, faceHeight } = detectFaceBounds(ctx, width, height);
   
   // Default State: Good to go
   let status: 'OK' | 'WARNING' | 'ERROR' = 'OK';
@@ -39,9 +39,22 @@ export const validateFrame = (
   }
 
   // 2. Lighting Check (Guidance Only - Does not block)
+  // Get brightness of center face
   const p = ctx.getImageData(Math.floor(cx), Math.floor(cy), 1, 1).data;
   const luma = 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2];
+
+  // Lighting Balance (Left vs Right Cheek) to detect shadows
+  // We sample two points relative to face width
+  const leftCheekX = Math.max(0, Math.floor(cx - faceWidth * 0.2));
+  const rightCheekX = Math.min(width - 1, Math.floor(cx + faceWidth * 0.2));
+  const cheekY = Math.floor(cy);
   
+  const pLeft = ctx.getImageData(leftCheekX, cheekY, 1, 1).data;
+  const lumaLeft = 0.299 * pLeft[0] + 0.587 * pLeft[1] + 0.114 * pLeft[2];
+  
+  const pRight = ctx.getImageData(rightCheekX, cheekY, 1, 1).data;
+  const lumaRight = 0.299 * pRight[0] + 0.587 * pRight[1] + 0.114 * pRight[2];
+
   if (luma < 30) {
       status = 'WARNING';
       message = "Low Light";
@@ -50,6 +63,11 @@ export const validateFrame = (
       status = 'WARNING';
       message = "Too Bright";
       instruction = "Reduce glare";
+  } else if (Math.abs(lumaLeft - lumaRight) > 50) {
+      // Significant shadow detected
+      status = 'WARNING';
+      message = "Uneven Light";
+      instruction = "Face light directly";
   }
 
   // 3. Stability (Guidance Only)

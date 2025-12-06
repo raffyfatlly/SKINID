@@ -28,18 +28,20 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
   const [aiProgress, setAiProgress] = useState(0); 
   const [streamError, setStreamError] = useState<string | null>(null);
   const [instruction, setInstruction] = useState<string>("Align Face");
+  const [statusColor, setStatusColor] = useState<'default'|'warning'|'error'>('default');
   const [capturedSnapshot, setCapturedSnapshot] = useState<string | null>(null);
   
   // Focus Logic
   const [showFocusTarget, setShowFocusTarget] = useState<{x: number, y: number} | null>(null);
+  const [currentStream, setCurrentStream] = useState<MediaStream | null>(null);
 
   useEffect(() => {
-    let currentStream: MediaStream | null = null;
+    let stream: MediaStream | null = null;
     let isMounted = true;
 
     const startCamera = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
+        stream = await navigator.mediaDevices.getUserMedia({
             video: { 
                 facingMode: 'user', 
                 width: { ideal: 1920 }, 
@@ -52,7 +54,7 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
             return;
         }
 
-        currentStream = stream;
+        setCurrentStream(stream);
         
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
@@ -70,8 +72,8 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
 
     return () => {
       isMounted = false;
-      if (currentStream) {
-        currentStream.getTracks().forEach(track => track.stop());
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
       }
     };
   }, []);
@@ -93,17 +95,32 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
 
   // Handle Manual Focus Tap
   const handleTapToFocus = async (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
-      if (!videoRef.current || !videoRef.current.srcObject) return;
-      
-      const rect = (e.target as HTMLElement).getBoundingClientRect();
+      // 1. UI Feedback
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
       const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
       const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
-      
       const x = clientX - rect.left;
       const y = clientY - rect.top;
 
       setShowFocusTarget({ x, y });
       setTimeout(() => setShowFocusTarget(null), 1000);
+
+      // 2. Hardware Focus (Attempt)
+      if (currentStream) {
+          const track = currentStream.getVideoTracks()[0];
+          const capabilities = track.getCapabilities() as any;
+          if (capabilities.focusMode) {
+              try {
+                  // Some devices support 'manual' focus or 'continuous' toggle to trigger refocus
+                  await track.applyConstraints({
+                      advanced: [{ focusMode: 'continuous' }] as any 
+                  });
+              } catch (err) {
+                  // Silently fail if constraint not supported
+                  console.debug("Focus constraint not supported", err);
+              }
+          }
+      }
   };
 
   const calculateAverageMetrics = (buffer: SkinMetrics[]): SkinMetrics => {
@@ -265,9 +282,11 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       
       const check = validateFrame(ctx, canvas.width, canvas.height, lastFacePos.current);
+      
       setInstruction(check.instruction || check.message);
+      setStatusColor(check.status === 'ERROR' ? 'error' : check.status === 'WARNING' ? 'warning' : 'default');
 
-      // CRITICAL FIX: If we see a face (isGood=true), ALWAYS progress.
+      // CRITICAL FIX: Always progress if face is detected (isGood=true), even if warnings exist
       if (check.isGood) {
           const SCAN_DURATION = 3000; 
           const increment = (deltaTime / SCAN_DURATION) * 100;
@@ -350,6 +369,12 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
       return "Finalizing...";
   };
 
+  const getStatusColor = () => {
+      if (statusColor === 'error') return 'bg-rose-500 border-rose-600 text-white';
+      if (statusColor === 'warning') return 'bg-amber-400 border-amber-500 text-amber-900';
+      return 'bg-white/90 border-white text-zinc-900';
+  }
+
   if (isProcessingAI) {
       return (
           <div className="h-screen w-full bg-black flex flex-col items-center justify-center relative overflow-hidden font-sans">
@@ -374,9 +399,9 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
   const circumference = 2 * Math.PI * radius;
 
   return (
-    <div className="relative h-screen w-full bg-black overflow-hidden font-sans">
+    <div className="relative h-screen w-full bg-black overflow-hidden font-sans select-none">
       <div 
-        className="absolute inset-0"
+        className="absolute inset-0 cursor-pointer"
         onClick={handleTapToFocus}
         onTouchStart={handleTapToFocus}
       >
@@ -396,11 +421,14 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
 
       <input type="file" ref={fileInputRef} accept="image/*" className="hidden" onChange={handleFileUpload} />
 
+      {/* Manual Focus Target */}
       {showFocusTarget && (
           <div 
-            className="absolute w-16 h-16 border-2 border-teal-400 rounded-full pointer-events-none animate-ping opacity-75 z-20"
-            style={{ top: showFocusTarget.y - 32, left: showFocusTarget.x - 32 }}
-          />
+            className="absolute w-20 h-20 border-2 border-white/80 rounded-lg pointer-events-none animate-ping z-20 flex items-center justify-center"
+            style={{ top: showFocusTarget.y - 40, left: showFocusTarget.x - 40 }}
+          >
+              <div className="w-1 h-1 bg-white rounded-full"></div>
+          </div>
       )}
 
       {/* MASK */}
@@ -426,9 +454,9 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
           </div>
 
           {isScanning && (
-              <div className="absolute top-28 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 w-full px-8">
-                  <div className="backdrop-blur-xl rounded-full px-6 py-3 shadow-lg flex items-center gap-3 bg-white/90 border border-white text-zinc-900">
-                      <Target size={18} />
+              <div className="absolute top-28 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 w-full px-8 transition-all duration-300">
+                  <div className={`backdrop-blur-xl rounded-full px-6 py-3 shadow-lg flex items-center gap-3 border transition-colors duration-300 ${getStatusColor()}`}>
+                      {statusColor === 'error' ? <Target size={18} /> : statusColor === 'warning' ? <Lightbulb size={18} /> : <CheckCircle2 size={18} />}
                       <span className="text-sm font-bold uppercase tracking-wide">{instruction}</span>
                   </div>
               </div>
@@ -445,13 +473,13 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
                    <circle
                       ref={circleRef}
                       cx="150" cy="150" r={radius}
-                      stroke="#10B981" 
+                      stroke={statusColor === 'warning' ? '#FBBF24' : '#10B981'} 
                       strokeWidth="6"
                       fill="transparent"
                       strokeDasharray={circumference}
                       strokeDashoffset={circumference}
                       strokeLinecap="round"
-                      className="transition-all duration-300 shadow-[0_0_15px_#10B981]" 
+                      className="transition-all duration-300 shadow-[0_0_15px_rgba(255,255,255,0.2)]" 
                    />
                 </svg>
               )}
@@ -474,7 +502,9 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
                     </div>
                 ) : (
                     <div className="text-center">
-                        <p className="text-white/80 text-xs font-medium tracking-widest uppercase animate-pulse mb-2">Scanning...</p>
+                        <p className="text-white/80 text-xs font-medium tracking-widest uppercase animate-pulse mb-2">
+                           Tap screen to focus
+                        </p>
                         <button onClick={() => setIsScanning(false)} className="px-6 py-2 rounded-full bg-white/10 backdrop-blur text-white text-xs font-bold hover:bg-white/20">Cancel</button>
                     </div>
                 )}
