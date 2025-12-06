@@ -43,8 +43,7 @@ export const validateFrame = (
   const p = ctx.getImageData(Math.floor(cx), Math.floor(cy), 1, 1).data;
   const luma = 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2];
 
-  // Lighting Balance (Left vs Right Cheek) to detect shadows
-  // We sample two points relative to face width
+  // Lighting Balance (Left vs Right Cheek) to detect side shadows
   const leftCheekX = Math.max(0, Math.floor(cx - faceWidth * 0.2));
   const rightCheekX = Math.min(width - 1, Math.floor(cx + faceWidth * 0.2));
   const cheekY = Math.floor(cy);
@@ -63,10 +62,10 @@ export const validateFrame = (
       status = 'WARNING';
       message = "Too Bright";
       instruction = "Reduce glare";
-  } else if (Math.abs(lumaLeft - lumaRight) > 50) {
-      // Significant shadow detected
+  } else if (Math.abs(lumaLeft - lumaRight) > 40) {
+      // Significant shadow detected - This ruins skin analysis accuracy
       status = 'WARNING';
-      message = "Uneven Light";
+      message = "Uneven Shadow";
       instruction = "Face light directly";
   }
 
@@ -81,7 +80,6 @@ export const validateFrame = (
   }
 
   // Always return isGood=true if face is detected, regardless of quality
-  // This ensures the progress bar NEVER freezes unless the face completely disappears.
   return { isGood: true, message, facePos: { cx, cy }, instruction, status };
 };
 

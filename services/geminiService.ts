@@ -1,16 +1,15 @@
+
 import { GoogleGenAI, Type, Chat } from "@google/genai";
 import { Product, SkinMetrics, UserProfile } from "../types";
 
-// User provided specific key for fallback to ensure functionality
-const RECOVERY_KEY = "AIzaSyD_Njjb7bioGhHAagqh_aeZZpXFGMR823s";
-
-// Create client lazily. Allow forcing the recovery key if the primary env key fails.
-const getAI = (useRecovery = false) => {
-  const key = useRecovery ? RECOVERY_KEY : (process.env.API_KEY || RECOVERY_KEY);
-  return new GoogleGenAI({ apiKey: key });
+// Initialize the Google GenAI client
+// SECURITY: API Key must be provided via environment variable process.env.API_KEY
+// Do NOT hardcode keys here.
+const getAI = () => {
+  return new GoogleGenAI({ apiKey: process.env.API_KEY });
 };
 
-// --- ERROR HANDLING & FALLBACKS ---
+// --- ERROR HANDLING ---
 
 export const isQuotaError = (error: any): boolean => {
     try {
@@ -23,37 +22,23 @@ export const isQuotaError = (error: any): boolean => {
 };
 
 /**
- * Generic retry wrapper for AI calls.
- * Tries with default key first. If Quota error, retries with RECOVERY_KEY.
+ * Wrapper for AI calls.
  */
 async function runWithRetry<T>(
     operation: (ai: GoogleGenAI) => Promise<T>, 
     fallbackValue?: T
 ): Promise<T> {
     try {
-        // Attempt 1: Default/Env Key
-        const ai = getAI(false);
+        const ai = getAI();
         return await operation(ai);
     } catch (error) {
-        if (isQuotaError(error)) {
-            console.warn("Quota exceeded. Retrying with Recovery Key...");
-            try {
-                // Attempt 2: Recovery Key
-                const ai = getAI(true);
-                return await operation(ai);
-            } catch (retryError) {
-                console.error("Recovery key also failed:", retryError);
-                if (fallbackValue) return fallbackValue;
-                throw retryError;
-            }
-        }
         console.error("AI Operation Failed:", error);
         if (fallbackValue) return fallbackValue;
         throw error;
     }
 }
 
-// --- FALLBACK DATA ---
+// --- FALLBACK DATA (Offline Mode) ---
 
 const getFallbackSkinMetrics = (): SkinMetrics => ({
     overallScore: 78,
@@ -131,7 +116,6 @@ export const analyzeFaceSkin = async (imageBase64: string): Promise<SkinMetrics>
 
 export const analyzeProductImage = async (imageBase64: string, userMetrics?: SkinMetrics): Promise<Product> => {
     return runWithRetry(async (ai) => {
-        // Construct a richer prompt with user context if available
         let promptText = "Extract product name, brand, type (CLEANSER, TONER, SERUM, MOISTURIZER, SPF, TREATMENT), and ingredients. Analyze suitability (0-100). Return JSON.";
         
         if (userMetrics) {
@@ -196,7 +180,6 @@ export const analyzeProductImage = async (imageBase64: string, userMetrics?: Ski
         });
 
         const data = JSON.parse(response.text || "{}");
-        // Ensure score is a valid number and realistic
         const rawScore = data.suitabilityScore;
         const finalScore = (typeof rawScore === 'number' && !isNaN(rawScore)) ? rawScore : 70;
 
@@ -233,13 +216,12 @@ export const createDermatologistSession = (
     ROLE: SkinOS AI Dermatologist. Concise, professional, empathetic. Short answers.
     `;
 
-    // Map history to correct format if needed, though usually strict typing handles 'user'|'model'
     const history = previousHistory.map(h => ({
         role: h.role === 'user' ? 'user' : 'model',
         parts: h.parts
     }));
 
-    return getAI(useRecoveryKey).chats.create({
+    return getAI().chats.create({
         model: 'gemini-2.5-flash',
         config: { systemInstruction: context },
         history: history
@@ -344,7 +326,7 @@ export const analyzeShelfHealth = (products: Product[], userProfile: UserProfile
         redundancies: [] as string[],
         synergies: [] as string[],
         balance: {
-            exfoliation: 0, // 0-100
+            exfoliation: 0, 
             hydration: 0,
             protection: 0,
             treatment: 0
@@ -355,7 +337,6 @@ export const analyzeShelfHealth = (products: Product[], userProfile: UserProfile
 
     if (products.length === 0) return { score: 0, analysis: { ...analysis, grade: 'D', criticalInsight: "Shelf is empty." } };
 
-    // 1. Audit Individual Products (Deep Scan)
     let cumulativeIrritationRisk = 0;
     products.forEach(p => {
         const audit = auditProduct(p, userProfile);
@@ -365,95 +346,63 @@ export const analyzeShelfHealth = (products: Product[], userProfile: UserProfile
         }
     });
 
-    // 2. Ingredient Aggregation
     const allIng = products.flatMap(p => p.ingredients.map(i => i.toLowerCase()));
     const textAllIng = allIng.join(' ');
     
-    // 3. Functional Classification (Calculate Balance)
     const countHas = (terms: string[]) => products.filter(p => terms.some(t => p.ingredients.join(' ').toLowerCase().includes(t.toLowerCase()))).length;
 
-    // Exfoliation Load (Acids, Retinols)
     const exfoliantCount = countHas(['glycolic', 'salicylic', 'lactic', 'retinol', 'tretinoin', 'adapalene', 'mandelic', 'bha', 'aha']);
-    // Hydration Load (Ceramides, HA, Glycerin)
     const hydrationCount = countHas(['ceramide', 'hyaluronic', 'glycerin', 'panthenol', 'squalane', 'centella']);
-    // Protection Load (SPF, Vitamin C, Antioxidants)
     const protectionCount = countHas(['zinc oxide', 'titanium', 'vitamin c', 'niacinamide', 'tocopherol', 'spf']);
-    // Treatment Load (Targeted actives)
     const treatmentCount = countHas(['benzoyl', 'azelaic', 'peptide', 'retinol', 'salicylic']);
 
-    // Normalize to 0-100 scale based on ideal "Routine Size" (approx 3-5 products)
     analysis.balance.exfoliation = Math.min(100, (exfoliantCount / 2) * 100); 
     analysis.balance.hydration = Math.min(100, (hydrationCount / 3) * 100);
     analysis.balance.protection = Math.min(100, (protectionCount / 2) * 100);
     analysis.balance.treatment = Math.min(100, (treatmentCount / 2) * 100);
 
-    // 4. Critical Synergy & Conflict Checks (The "Brain")
-    
-    // CONFLICT: Retinol + AHA/BHA (Irritation Bomb)
     if (textAllIng.includes('retinol') && (textAllIng.includes('glycolic') || textAllIng.includes('salicylic'))) {
         analysis.conflicts.push("Retinol + Exfoliating Acids (High irritation risk)");
         cumulativeIrritationRisk += 2;
     }
-    // CONFLICT: Benzoyl Peroxide + Retinol (Deactivation)
     if (textAllIng.includes('benzoyl') && textAllIng.includes('retinol')) {
         analysis.conflicts.push("Benzoyl Peroxide + Retinol (May deactivate each other)");
     }
-    // CONFLICT: Copper Peptides + Vitamin C (Destabilization)
     if (textAllIng.includes('copper peptide') && textAllIng.includes('ascorbic')) {
         analysis.conflicts.push("Copper Peptides + Vitamin C (Can destabilize)");
     }
     
-    // SYNERGY: Vitamin C + SPF
     if (textAllIng.includes('vitamin c') && (textAllIng.includes('zinc oxide') || textAllIng.includes('titanium') || textAllIng.includes('spf'))) {
         analysis.synergies.push("Vitamin C + SPF (Boosts sun protection)");
     }
-    // SYNERGY: Retinol + Hyaluronic/Ceramides
     if (textAllIng.includes('retinol') && (textAllIng.includes('ceramide') || textAllIng.includes('hyaluronic'))) {
         analysis.synergies.push("Retinol + Barrier Repair (Reduces side effects)");
     }
-    // SYNERGY: Salicylic + Niacinamide
     if (textAllIng.includes('salicylic') && textAllIng.includes('niacinamide')) {
         analysis.synergies.push("BHA + Niacinamide (Pore minimizing duo)");
     }
-
-    // 5. Gap Analysis (User Needs vs Shelf Reality)
-    const userNeeds = getClinicalPrescription(userProfile);
-    const lowMetric = userProfile.biometrics.acneActive < 60 ? 'Acne' 
-                    : userProfile.biometrics.hydration < 55 ? 'Hydration' 
-                    : userProfile.biometrics.redness < 60 ? 'Sensitivity' 
-                    : 'Aging';
 
     const types = products.map(p => p.type);
     if (!types.includes('CLEANSER')) analysis.missing.push("Cleanser");
     if (!types.includes('MOISTURIZER')) analysis.missing.push("Moisturizer");
     if (!types.includes('SPF')) analysis.missing.push("Sunscreen");
 
-    // "Smart" Missing - check if they are addressing their biggest problem
-    if (lowMetric === 'Acne' && exfoliantCount === 0) analysis.missing.push("Acne Treatment");
-    if (lowMetric === 'Hydration' && hydrationCount < 2) analysis.missing.push("Hydrating Serum");
-    if (lowMetric === 'Aging' && treatmentCount === 0) analysis.missing.push("Anti-Aging Active");
-
-    // 6. Routine Grading & Critical Insight
     let score = 100;
     score -= analysis.riskyProducts.length * 15;
     score -= analysis.conflicts.length * 20;
     score -= analysis.missing.length * 10;
     
-    // Intensity Penalty: If Sensitive Skin but High Exfoliation
     if (userProfile.biometrics.redness < 60 && exfoliantCount > 1) {
         score -= 20;
         analysis.criticalInsight = "Routine is too aggressive for your sensitive skin.";
     } 
-    // Intensity Penalty: If Dry Skin but No Hydration
     else if (userProfile.biometrics.hydration < 50 && hydrationCount < 1) {
         score -= 20;
         analysis.criticalInsight = "Severe lack of hydration for dry skin type.";
     }
-    // Good Balance Reward
     else if (analysis.missing.length === 0 && analysis.conflicts.length === 0) {
         analysis.criticalInsight = "Excellent routine balance and coverage.";
     }
-    // Generic fallback insights
     else if (analysis.conflicts.length > 0) {
         analysis.criticalInsight = "Chemical conflicts detected. Separate actives to AM/PM.";
     } else if (analysis.missing.length > 0) {
@@ -500,7 +449,6 @@ export const getBuyingDecision = (product: Product, shelf: Product[], user: User
     let description = "Great addition to your routine.";
     let color = "emerald";
 
-    // Detect existing products of the same type for SWAP analysis
     const existing = shelf.filter(p => p.type === product.type);
 
     if (isRisky) {
@@ -514,16 +462,15 @@ export const getBuyingDecision = (product: Product, shelf: Product[], user: User
         description = "Clashes with products currently on your shelf.";
         color = "amber";
     } else if (isRedundant) {
-        // Implement SWAP logic
         const bestExisting = existing.reduce((prev, current) => {
              const prevScore = auditProduct(prev, user).adjustedScore;
              const currScore = auditProduct(current, user).adjustedScore;
              return (prevScore > currScore) ? prev : current;
-        }, existing[0] || product); // Fallback to current product if shelf filtering fails logic
+        }, existing[0] || product);
 
         const existingScore = bestExisting ? auditProduct(bestExisting, user).adjustedScore : 0;
 
-        if (score > existingScore + 15) { // Significant improvement required to recommend replacement
+        if (score > existingScore + 15) { 
             decision = 'SWAP';
             title = "Upgrade Found";
             description = `Significantly better than your current ${product.type.toLowerCase()}.`;
@@ -541,12 +488,10 @@ export const getBuyingDecision = (product: Product, shelf: Product[], user: User
         color = "amber";
     }
 
-    // Comparison logic
     let comparisonResult = 'EQUAL';
     if (decision === 'SWAP') {
         comparisonResult = 'BETTER';
     } else if (decision === 'COMPARE') {
-        // If not swap but compare, check if worse
         const bestExisting = existing.reduce((prev, current) => {
              const prevScore = auditProduct(prev, user).adjustedScore;
              const currScore = auditProduct(current, user).adjustedScore;

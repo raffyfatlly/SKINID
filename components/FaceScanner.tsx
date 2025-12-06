@@ -1,6 +1,6 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { Sparkles, Image as ImageIcon, ScanFace, BrainCircuit, Target, Lightbulb, CheckCircle2 } from 'lucide-react';
+import { Sparkles, Image as ImageIcon, ScanFace, BrainCircuit, Target, Lightbulb, CheckCircle2, Focus } from 'lucide-react';
 import { analyzeSkinFrame, drawBiometricOverlay, validateFrame, enhanceSkinTexture, drawImperfectionMap } from '../services/visionService';
 import { analyzeFaceSkin } from '../services/geminiService';
 import { SkinMetrics } from '../types';
@@ -95,7 +95,6 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
 
   // Handle Manual Focus Tap
   const handleTapToFocus = async (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
-      // 1. UI Feedback
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
       const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
       const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
@@ -103,20 +102,19 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
       const y = clientY - rect.top;
 
       setShowFocusTarget({ x, y });
-      setTimeout(() => setShowFocusTarget(null), 1000);
+      setTimeout(() => setShowFocusTarget(null), 1500);
 
-      // 2. Hardware Focus (Attempt)
       if (currentStream) {
           const track = currentStream.getVideoTracks()[0];
           const capabilities = track.getCapabilities() as any;
           if (capabilities.focusMode) {
               try {
-                  // Some devices support 'manual' focus or 'continuous' toggle to trigger refocus
+                  // Attempt to re-trigger focus by toggling mode or setting a point of interest if supported
+                  // Note: Most webcams don't support pointOfInterest via standard API yet, but constraints re-application helps exposure
                   await track.applyConstraints({
                       advanced: [{ focusMode: 'continuous' }] as any 
                   });
               } catch (err) {
-                  // Silently fail if constraint not supported
                   console.debug("Focus constraint not supported", err);
               }
           }
@@ -421,13 +419,14 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
 
       <input type="file" ref={fileInputRef} accept="image/*" className="hidden" onChange={handleFileUpload} />
 
-      {/* Manual Focus Target */}
+      {/* Manual Focus Target - Visual Feedback */}
       {showFocusTarget && (
           <div 
-            className="absolute w-20 h-20 border-2 border-white/80 rounded-lg pointer-events-none animate-ping z-20 flex items-center justify-center"
+            className="absolute w-20 h-20 border-2 border-teal-400 rounded-lg pointer-events-none animate-ping z-30 flex items-center justify-center shadow-[0_0_15px_rgba(45,212,191,0.5)]"
             style={{ top: showFocusTarget.y - 40, left: showFocusTarget.x - 40 }}
           >
-              <div className="w-1 h-1 bg-white rounded-full"></div>
+              <div className="w-1.5 h-1.5 bg-teal-200 rounded-full"></div>
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 text-[10px] font-bold text-teal-300 uppercase tracking-widest">Focus</div>
           </div>
       )}
 
@@ -502,8 +501,8 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
                     </div>
                 ) : (
                     <div className="text-center">
-                        <p className="text-white/80 text-xs font-medium tracking-widest uppercase animate-pulse mb-2">
-                           Tap screen to focus
+                        <p className="text-white/80 text-xs font-medium tracking-widest uppercase animate-pulse mb-2 flex items-center justify-center gap-2">
+                           <Focus size={12} /> Tap screen to focus
                         </p>
                         <button onClick={() => setIsScanning(false)} className="px-6 py-2 rounded-full bg-white/10 backdrop-blur text-white text-xs font-bold hover:bg-white/20">Cancel</button>
                     </div>
