@@ -1,6 +1,7 @@
 
 export interface SkinMetrics {
   overallScore: number; // 0-100 (Higher is Better)
+  skinAge?: number; // New: AI Estimated Skin Age
   
   // 1. Acne & Blemishes
   acneActive: number; // Higher = Clearer (No active breakouts)

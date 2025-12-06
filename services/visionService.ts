@@ -1,5 +1,6 @@
 
 
+
 import { SkinMetrics } from '../types';
 
 /**
@@ -83,9 +84,78 @@ const rgbToLab = (r: number, g: number, b: number) => {
 };
 
 /**
- * TEXTURE ENHANCEMENT & CLINICAL OVERLAY ENGINE
- * HD Tech Look: No drawn lines, only precise pinpointing.
+ * APPLIES DERMATOLOGICAL FILTERS:
+ * 1. High Contrast (to enhance dark spots, scars)
+ * 2. Red Boost (to enhance active acne/inflammation)
+ * 3. Sharpening (to detect uneven skin texture)
  */
+export const applyMedicalProcessing = (
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number
+) => {
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const data = imageData.data;
+    const output = ctx.createImageData(width, height);
+    const dst = output.data;
+
+    const contrast = 1.25; // Enhance dark spots/tone
+    const intercept = 128 * (1 - contrast);
+
+    // Convolution Kernel for Sharpening (High Definition)
+    //  0 -1  0
+    // -1  5 -1
+    //  0 -1  0
+    const kernel = [0, -1, 0, -1, 5, -1, 0, -1, 0];
+    const kWeight = 1; // Sum of kernel
+
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const idx = (y * width + x) * 4;
+            
+            // 1. SHARPENING CONVOLUTION
+            let r = 0, g = 0, b = 0;
+            if (x > 0 && x < width - 1 && y > 0 && y < height - 1) {
+                // Apply 3x3 kernel
+                let kIndex = 0;
+                for (let ky = -1; ky <= 1; ky++) {
+                    for (let kx = -1; kx <= 1; kx++) {
+                        const nIdx = ((y + ky) * width + (x + kx)) * 4;
+                        const weight = kernel[kIndex++];
+                        r += data[nIdx] * weight;
+                        g += data[nIdx + 1] * weight;
+                        b += data[nIdx + 2] * weight;
+                    }
+                }
+            } else {
+                // Edge case: keep original
+                r = data[idx]; g = data[idx+1]; b = data[idx+2];
+            }
+
+            // 2. CONTRAST BOOST (Enhance Uneven Tone/Scars)
+            r = (r * contrast) + intercept;
+            g = (g * contrast) + intercept;
+            b = (b * contrast) + intercept;
+
+            // 3. RED CHANNEL BOOST (Enhance Active Acne/Sensitivity)
+            // If pixel is generally skin-colored (Red > Blue & Red > Green), boost Red specifically
+            if (r > g && r > b) {
+                r = r * 1.15; // 15% Red Boost for inflammation detection
+                // Slight desaturation of other channels to make red pop
+                g = g * 0.95;
+            }
+
+            // Clamp values
+            dst[idx] = Math.min(255, Math.max(0, r));
+            dst[idx + 1] = Math.min(255, Math.max(0, g));
+            dst[idx + 2] = Math.min(255, Math.max(0, b));
+            dst[idx + 3] = 255; // Alpha
+        }
+    }
+
+    ctx.putImageData(output, 0, 0);
+};
+
 export const applyClinicalOverlays = (
     ctx: CanvasRenderingContext2D,
     width: number,
@@ -95,41 +165,16 @@ export const applyClinicalOverlays = (
     const { cx, cy, faceWidth, faceHeight } = detectFaceBounds(ctx, width, height);
     if (faceWidth === 0) return;
 
+    // Apply the medical enhancement filter FIRST
+    // This physically alters the canvas image to show the effect
+    applyMedicalProcessing(ctx, width, height);
+
     const imageData = ctx.getImageData(0, 0, width, height);
     const data = imageData.data;
     const stats = getSkinStats(imageData);
 
-    // 2. HD Enhancement (Selective Contrast Boost)
-    // We boost contrast slightly on skin areas to make imperfections visible without blurring.
-    // AND we tint red areas slightly redder to make them pop for the user to see.
-    for (let i = 0; i < data.length; i += 4) {
-        const r = data[i];
-        const g = data[i+1];
-        const b = data[i+2];
-        
-        // Simple skin check to avoid background enhancement
-        if (r > 60 && g > 40 && b > 20 && r > g) {
-            // Contrast Boost
-            // (value - 128) * factor + 128
-            const factor = 1.1; // 10% boost
-            data[i] = Math.min(255, Math.max(0, (r - 128) * factor + 128));
-            data[i+1] = Math.min(255, Math.max(0, (g - 128) * factor + 128));
-            data[i+2] = Math.min(255, Math.max(0, (b - 128) * factor + 128));
-
-            // Enhancement: If significantly red, boost red channel to make it obvious
-            const { a } = rgbToLab(r, g, b);
-            if (a > stats.meanA + 10) {
-                 data[i] = Math.min(255, data[i] + 20); // Boost Red
-            }
-        }
-    }
-    ctx.putImageData(imageData, 0, 0);
-
-    // 3. Technical Pinpointing (Crosshairs)
-    // No drawn facial zones (no Bezier curves).
-    // Just crisp pixel markers.
-    
-    ctx.lineWidth = 1; // hairline
+    // 2. Technical Pinpointing (Crosshairs) on the ENHANCED image
+    ctx.lineWidth = 1; 
     const scanStep = 6; 
     
     for (let y = Math.floor(cy - faceHeight * 0.45); y < cy + faceHeight * 0.5; y += scanStep) {
@@ -137,7 +182,6 @@ export const applyClinicalOverlays = (
             
             if (x < 0 || x >= width || y < 0 || y >= height) continue;
 
-            // Elliptical mask
             const dx_ = (x - cx) / (faceWidth * 0.5);
             const dy_ = (y - cy) / (faceHeight * 0.55);
             if (dx_*dx_ + dy_*dy_ > 1) continue;
@@ -152,59 +196,24 @@ export const applyClinicalOverlays = (
             const { L, a } = rgbToLab(r,g,b);
 
             // Inflammation / Acne (Red Crosshair)
-            if (a > stats.meanA + 15) {
+            // Threshold adapted for the boosted red channel
+            if (a > stats.meanA + 18) {
                 const size = 3;
-                ctx.strokeStyle = 'rgba(255, 60, 60, 0.6)'; // Crisp Red
+                ctx.strokeStyle = 'rgba(255, 40, 40, 0.7)'; // Bright Red
                 ctx.beginPath();
                 ctx.moveTo(x - size, y); ctx.lineTo(x + size, y);
                 ctx.moveTo(x, y - size); ctx.lineTo(x, y + size);
                 ctx.stroke();
             }
-            // Pores / Dark Spots (Cyan Crosshair - Technical Look)
-            else if (L < stats.meanL - 25) {
+            // Pores / Dark Spots (Cyan Crosshair)
+            // Threshold adapted for high contrast
+            else if (L < stats.meanL - 30) {
                  const size = 2;
-                 ctx.fillStyle = 'rgba(0, 255, 255, 0.5)'; // Tech Cyan dot
+                 ctx.fillStyle = 'rgba(0, 255, 255, 0.6)'; 
                  ctx.fillRect(x, y, 1.5, 1.5);
             }
         }
     }
-};
-
-export const enhanceSkinTexture = (
-    ctx: CanvasRenderingContext2D,
-    width: number,
-    height: number
-): ImageData => {
-    return ctx.getImageData(0, 0, width, height);
-};
-
-export const drawImperfectionMap = (
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number
-) => {
-    // Legacy mapping - kept if needed for other views, but main flow uses applyClinicalOverlays
-    const imageData = ctx.getImageData(0, 0, width, height);
-    const data = imageData.data;
-    const stats = getSkinStats(imageData);
-
-    for (let i = 0; i < data.length; i += 4) {
-        const r = data[i];
-        const g = data[i+1];
-        const b = data[i+2];
-
-        if (!isSkinPixel(r, g, b)) continue;
-
-        const { L, a } = rgbToLab(r, g, b);
-
-        if (a > stats.meanA + 10) { 
-             data[i] = Math.min(255, r + 40); 
-             data[i+1] = Math.max(0, g - 20);
-        } else if (L < stats.meanL - 15) { 
-             data[i+2] = Math.min(255, b + 60); 
-        }
-    }
-    ctx.putImageData(imageData, 0, 0);
 };
 
 const isSkinPixel = (r: number, g: number, b: number): boolean => {
@@ -435,9 +444,24 @@ export const analyzeSkinFrame = (
   ) / 11.4;
 
   const overallScore = normalizeScore(weightedScore);
+  
+  // Calculate Skin Age based on deficits from perfect score (100)
+  // Baseline assumption: 25 years old if perfect.
+  // Add years for distinct aging markers.
+  let estimatedAge = 25;
+  if (wrinkleDeep < 90) estimatedAge += (90 - wrinkleDeep) * 0.5; // Deep wrinkles add significant age
+  if (wrinkleFine < 90) estimatedAge += (90 - wrinkleFine) * 0.2;
+  if (sagging < 90) estimatedAge += (90 - sagging) * 0.4;
+  if (pigmentation < 90) estimatedAge += (90 - pigmentation) * 0.2;
+  if (darkCircles < 80) estimatedAge += (80 - darkCircles) * 0.1;
+  
+  // Bonus: Good texture reduces estimated age slightly
+  if (texture > 90) estimatedAge -= 2;
+  if (hydration > 90) estimatedAge -= 1;
 
   return {
     overallScore: overallScore,
+    skinAge: Math.floor(estimatedAge), // Add Skin Age
     acneActive: normalizeScore(acneActive),
     acneScars: normalizeScore(acneScars),
     poreSize: normalizeScore(poreSize),

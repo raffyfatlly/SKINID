@@ -1,5 +1,5 @@
 {
-  "name": "SkinOS 6.1",
+  "name": "SkinOS (Production)",
   "description": "Advanced dermatological assistant using computer vision and AI to analyze skin health, scan product ingredients, and manage routine safety.",
   "requestFramePermissions": [
     "camera"

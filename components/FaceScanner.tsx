@@ -1,7 +1,7 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Sparkles, Image as ImageIcon, ScanFace, BrainCircuit, Target, Lightbulb, CheckCircle2, Focus } from 'lucide-react';
-import { analyzeSkinFrame, drawBiometricOverlay, validateFrame, applyClinicalOverlays } from '../services/visionService';
+import { analyzeSkinFrame, drawBiometricOverlay, validateFrame, applyClinicalOverlays, applyMedicalProcessing } from '../services/visionService';
 import { analyzeFaceSkin } from '../services/geminiService';
 import { SkinMetrics } from '../types';
 
@@ -141,11 +141,12 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
           hydration: acc.hydration + curr.hydration,
           oiliness: acc.oiliness + curr.oiliness,
           darkCircles: acc.darkCircles + curr.darkCircles,
+          skinAge: (acc.skinAge || 0) + (curr.skinAge || 25), // Average skin age
           timestamp: 0
       }), { 
           overallScore: 0, acneActive: 0, acneScars: 0, poreSize: 0, blackheads: 0, 
           wrinkleFine: 0, wrinkleDeep: 0, sagging: 0, pigmentation: 0, redness: 0, 
-          texture: 0, hydration: 0, oiliness: 0, darkCircles: 0, timestamp: 0 
+          texture: 0, hydration: 0, oiliness: 0, darkCircles: 0, skinAge: 0, timestamp: 0 
       });
 
       const len = buffer.length;
@@ -164,6 +165,7 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
           hydration: Math.round(sum.hydration / len),
           oiliness: Math.round(sum.oiliness / len),
           darkCircles: Math.round(sum.darkCircles / len),
+          skinAge: Math.round(sum.skinAge! / len),
           observations: buffer[buffer.length-1].observations,
           timestamp: Date.now()
       };
@@ -185,7 +187,7 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
           ctx.drawImage(source, 0, 0, captureCanvas.width, captureCanvas.height);
           if (flip) ctx.setTransform(1, 0, 0, 1, 0, 0);
           
-          // Apply the Clinical Overlay Logic (Lines + Dots)
+          // Apply Clinical Overlay Logic (Lines + Dots) - this uses the 'medical processing' internally
           applyClinicalOverlays(ctx, captureCanvas.width, captureCanvas.height);
           
           return captureCanvas.toDataURL('image/jpeg', 0.95);
@@ -193,7 +195,8 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
       return '';
   };
   
-  const captureRawImage = (source: HTMLVideoElement | HTMLImageElement, flip: boolean): string => {
+  // Capture image for AI Analysis - NOW WITH ENHANCED EFFECTS
+  const captureProcessedImage = (source: HTMLVideoElement | HTMLImageElement, flip: boolean): string => {
       const captureCanvas = document.createElement('canvas');
       const width = source instanceof HTMLVideoElement ? source.videoWidth : source.naturalWidth;
       const height = source instanceof HTMLVideoElement ? source.videoHeight : source.naturalHeight;
@@ -206,6 +209,11 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
               ctx.scale(-1, 1);
           }
           ctx.drawImage(source, 0, 0, width, height);
+          if (flip) ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+          // Apply High Contrast, Red Boost, Sharpening
+          applyMedicalProcessing(ctx, width, height);
+
           return captureCanvas.toDataURL('image/jpeg', 0.95);
       }
       return '';
@@ -233,13 +241,18 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
               const ctx = canvas.getContext('2d');
               if (ctx) {
                   ctx.drawImage(img, 0, 0, w, h);
-                  // Apply overlay to uploaded image too
-                  applyClinicalOverlays(ctx, w, h);
                   
+                  // Capture visual snapshot for UI
+                  applyClinicalOverlays(ctx, w, h);
                   const displaySnapshot = canvas.toDataURL('image/jpeg', 0.9);
-                  const rawBase64 = canvas.toDataURL('image/jpeg', 0.9); // Reuse for now, ideally raw should be clean
+                  
+                  // Re-draw original for processing
+                  ctx.drawImage(img, 0, 0, w, h);
+                  // Apply medical filters for AI
+                  applyMedicalProcessing(ctx, w, h);
+                  const processedBase64 = canvas.toDataURL('image/jpeg', 0.9);
 
-                  analyzeFaceSkin(rawBase64).then(aiMetrics => {
+                  analyzeFaceSkin(processedBase64).then(aiMetrics => {
                       setAiProgress(100);
                       setTimeout(() => {
                         onScanComplete(aiMetrics, displaySnapshot);
@@ -314,16 +327,21 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
       if (progressRef.current >= 100) {
            setIsScanning(false);
            setIsProcessingAI(true);
-           const rawImage = captureRawImage(video, true);
+           
+           // Capture Processed Image (Contrast, Red, Sharpness) for AI
+           const processedImage = captureProcessedImage(video, true);
            const avgLocalMetrics = calculateAverageMetrics(metricsBuffer.current);
-           // Generate Image with Clinical Overlay
+           
+           // Generate Image with Clinical Overlay for Display
            const displayImage = captureSnapshot(video, true);
            setCapturedSnapshot(displayImage);
 
-           analyzeFaceSkin(rawImage).then(aiMetrics => {
+           analyzeFaceSkin(processedImage).then(aiMetrics => {
                setAiProgress(100);
                setTimeout(() => {
-                   onScanComplete(aiMetrics, displayImage);
+                   // Merge local skin age calculation if AI doesn't return it
+                   const finalMetrics = { ...aiMetrics, skinAge: aiMetrics.skinAge || avgLocalMetrics.skinAge };
+                   onScanComplete(finalMetrics, displayImage);
                }, 500);
            }).catch(err => {
                console.error("AI Failed", err);
@@ -357,9 +375,9 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
   }, [isScanning, scanFrame]);
 
   const getAIStatusText = (p: number) => {
-      if (p < 30) return "Processing...";
-      if (p < 60) return "Mapping Pores...";
-      if (p < 90) return "Analyzing Texture...";
+      if (p < 30) return "Enhancing Contrast...";
+      if (p < 60) return "Mapping Redness...";
+      if (p < 90) return "Analyzing Defects...";
       return "Finalizing...";
   };
 
