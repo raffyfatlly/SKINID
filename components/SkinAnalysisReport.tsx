@@ -1,8 +1,4 @@
 
-
-
-
-
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { SkinMetrics, Product, UserProfile } from '../types';
 import { auditProduct } from '../services/geminiService';
@@ -677,8 +673,8 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
 
                  <div className="absolute bottom-8 left-8 text-white w-full pr-8 flex justify-between items-end">
                      <div className="tech-reveal">
-                         <span className="text-[10px] font-bold text-teal-300 uppercase tracking-widest mb-1 block">Skin Age</span>
-                         <span className="text-6xl font-black tracking-tighter text-white">{metrics.skinAge || 25}</span>
+                         <span className="text-[10px] font-bold text-teal-300 uppercase tracking-widest mb-1 block">Skin Score</span>
+                         <span className="text-6xl font-black tracking-tighter text-white">{metrics.overallScore}</span>
                      </div>
                      <div className="bg-black/40 backdrop-blur-md px-4 py-2 rounded-xl border border-white/10 text-right tech-reveal delay-100">
                          <span className="text-[9px] font-bold text-teal-300 uppercase tracking-widest block mb-1">Skin Type</span>
