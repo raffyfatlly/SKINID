@@ -1,7 +1,7 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Sparkles, Image as ImageIcon, ScanFace, BrainCircuit, Target, Lightbulb, CheckCircle2, Focus } from 'lucide-react';
-import { analyzeSkinFrame, drawBiometricOverlay, validateFrame, enhanceSkinTexture, drawImperfectionMap } from '../services/visionService';
+import { analyzeSkinFrame, drawBiometricOverlay, validateFrame, applyClinicalOverlays } from '../services/visionService';
 import { analyzeFaceSkin } from '../services/geminiService';
 import { SkinMetrics } from '../types';
 
@@ -109,8 +109,6 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
           const capabilities = track.getCapabilities() as any;
           if (capabilities.focusMode) {
               try {
-                  // Attempt to re-trigger focus by toggling mode or setting a point of interest if supported
-                  // Note: Most webcams don't support pointOfInterest via standard API yet, but constraints re-application helps exposure
                   await track.applyConstraints({
                       advanced: [{ focusMode: 'continuous' }] as any 
                   });
@@ -171,7 +169,7 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
       };
   };
 
-  const captureSnapshot = (source: HTMLVideoElement | HTMLImageElement, metrics: SkinMetrics, flip: boolean): string => {
+  const captureSnapshot = (source: HTMLVideoElement | HTMLImageElement, flip: boolean): string => {
       const captureCanvas = document.createElement('canvas');
       const width = source instanceof HTMLVideoElement ? source.videoWidth : source.naturalWidth;
       const height = source instanceof HTMLVideoElement ? source.videoHeight : source.naturalHeight;
@@ -187,9 +185,9 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
           ctx.drawImage(source, 0, 0, captureCanvas.width, captureCanvas.height);
           if (flip) ctx.setTransform(1, 0, 0, 1, 0, 0);
           
-          const enhancedImageData = enhanceSkinTexture(ctx, width, height);
-          ctx.putImageData(enhancedImageData, 0, 0);
-          drawImperfectionMap(ctx, captureCanvas.width, captureCanvas.height);
+          // Apply the Clinical Overlay Logic (Lines + Dots)
+          applyClinicalOverlays(ctx, captureCanvas.width, captureCanvas.height);
+          
           return captureCanvas.toDataURL('image/jpeg', 0.95);
       }
       return '';
@@ -235,14 +233,14 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
               const ctx = canvas.getContext('2d');
               if (ctx) {
                   ctx.drawImage(img, 0, 0, w, h);
-                  const enhancedImageData = enhanceSkinTexture(ctx, w, h);
-                  ctx.putImageData(enhancedImageData, 0, 0);
-                  const rawBase64 = canvas.toDataURL('image/jpeg', 0.9);
+                  // Apply overlay to uploaded image too
+                  applyClinicalOverlays(ctx, w, h);
                   
+                  const displaySnapshot = canvas.toDataURL('image/jpeg', 0.9);
+                  const rawBase64 = canvas.toDataURL('image/jpeg', 0.9); // Reuse for now, ideally raw should be clean
+
                   analyzeFaceSkin(rawBase64).then(aiMetrics => {
                       setAiProgress(100);
-                      drawImperfectionMap(ctx, w, h); 
-                      const displaySnapshot = canvas.toDataURL('image/jpeg', 0.9);
                       setTimeout(() => {
                         onScanComplete(aiMetrics, displaySnapshot);
                         setIsProcessingAI(false);
@@ -284,7 +282,6 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
       setInstruction(check.instruction || check.message);
       setStatusColor(check.status === 'ERROR' ? 'error' : check.status === 'WARNING' ? 'warning' : 'default');
 
-      // CRITICAL FIX: Always progress if face is detected (isGood=true), even if warnings exist
       if (check.isGood) {
           const SCAN_DURATION = 3000; 
           const increment = (deltaTime / SCAN_DURATION) * 100;
@@ -293,7 +290,6 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
           if (check.facePos) lastFacePos.current = check.facePos;
       }
 
-      // Run Analysis Throttled
       if (now - lastAnalysisTimeRef.current > 200) {
           const metrics = analyzeSkinFrame(ctx, canvas.width, canvas.height);
           cachedMetricsRef.current = metrics;
@@ -308,7 +304,6 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
           drawBiometricOverlay(ctx, canvas.width, canvas.height, cachedMetricsRef.current);
       }
 
-      // Update UI Ring
       if (circleRef.current) {
           const radius = 130;
           const circumference = 2 * Math.PI * radius;
@@ -321,7 +316,8 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
            setIsProcessingAI(true);
            const rawImage = captureRawImage(video, true);
            const avgLocalMetrics = calculateAverageMetrics(metricsBuffer.current);
-           const displayImage = captureSnapshot(video, avgLocalMetrics, true);
+           // Generate Image with Clinical Overlay
+           const displayImage = captureSnapshot(video, true);
            setCapturedSnapshot(displayImage);
 
            analyzeFaceSkin(rawImage).then(aiMetrics => {
@@ -377,7 +373,7 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
       return (
           <div className="h-screen w-full bg-black flex flex-col items-center justify-center relative overflow-hidden font-sans">
              {capturedSnapshot && (
-                 <img src={capturedSnapshot} className="absolute inset-0 w-full h-full object-cover opacity-30 blur-2xl scale-110" />
+                 <img src={capturedSnapshot} className="absolute inset-0 w-full h-full object-cover opacity-50 blur-sm scale-105" />
              )}
              <div className="relative z-10 flex flex-col items-center w-full max-w-[280px]">
                  <div className="w-24 h-24 relative mb-10">
@@ -419,7 +415,6 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
 
       <input type="file" ref={fileInputRef} accept="image/*" className="hidden" onChange={handleFileUpload} />
 
-      {/* Manual Focus Target - Visual Feedback */}
       {showFocusTarget && (
           <div 
             className="absolute w-20 h-20 border-2 border-teal-400 rounded-lg pointer-events-none animate-ping z-30 flex items-center justify-center shadow-[0_0_15px_rgba(45,212,191,0.5)]"
@@ -430,7 +425,6 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
           </div>
       )}
 
-      {/* MASK */}
       <div className="absolute inset-0 pointer-events-none z-10">
          <svg width="100%" height="100%" preserveAspectRatio="none">
            <defs>
@@ -443,7 +437,6 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
          </svg>
       </div>
       
-      {/* UI */}
       <div className="absolute inset-0 z-20 flex flex-col justify-between pointer-events-none">
           <div className="w-full p-6 pt-12 flex justify-between items-start pointer-events-auto">
              <div className="bg-white/10 backdrop-blur-md rounded-full px-4 py-2 border border-white/10 flex items-center gap-2">

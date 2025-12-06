@@ -1,11 +1,9 @@
 
+
 import { SkinMetrics } from '../types';
 
 /**
  * Checks video frame quality before analysis.
- * "Guide, Don't Gatekeep" philosophy:
- * We allow the scan to proceed (isGood=true) even if conditions aren't perfect,
- * providing warnings/instruction instead of blocking progress.
  */
 export const validateFrame = (
   ctx: CanvasRenderingContext2D,
@@ -15,19 +13,15 @@ export const validateFrame = (
 ): { isGood: boolean; message: string; facePos?: { cx: number, cy: number }; instruction?: string; status: 'OK' | 'WARNING' | 'ERROR' } => {
   const { cx, cy, faceWidth, faceHeight } = detectFaceBounds(ctx, width, height);
   
-  // Default State: Good to go
   let status: 'OK' | 'WARNING' | 'ERROR' = 'OK';
   let isGood = true;
   let message = "Perfect";
   let instruction = "Hold steady...";
 
-  // 0. No Face Detected (Fallback if faceWidth is tiny)
-  // This is the ONLY hard blocker.
   if (faceWidth < width * 0.1) {
        return { isGood: false, message: "No Face", instruction: "Position face in circle", status: 'ERROR' };
   }
 
-  // 1. Position Check (Guidance Only - Does not block)
   if (faceWidth < width * 0.2) {
       status = 'WARNING';
       message = "Move Closer";
@@ -38,21 +32,8 @@ export const validateFrame = (
       instruction = "Back up slightly";
   }
 
-  // 2. Lighting Check (Guidance Only - Does not block)
-  // Get brightness of center face
   const p = ctx.getImageData(Math.floor(cx), Math.floor(cy), 1, 1).data;
   const luma = 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2];
-
-  // Lighting Balance (Left vs Right Cheek) to detect side shadows
-  const leftCheekX = Math.max(0, Math.floor(cx - faceWidth * 0.2));
-  const rightCheekX = Math.min(width - 1, Math.floor(cx + faceWidth * 0.2));
-  const cheekY = Math.floor(cy);
-  
-  const pLeft = ctx.getImageData(leftCheekX, cheekY, 1, 1).data;
-  const lumaLeft = 0.299 * pLeft[0] + 0.587 * pLeft[1] + 0.114 * pLeft[2];
-  
-  const pRight = ctx.getImageData(rightCheekX, cheekY, 1, 1).data;
-  const lumaRight = 0.299 * pRight[0] + 0.587 * pRight[1] + 0.114 * pRight[2];
 
   if (luma < 30) {
       status = 'WARNING';
@@ -62,14 +43,8 @@ export const validateFrame = (
       status = 'WARNING';
       message = "Too Bright";
       instruction = "Reduce glare";
-  } else if (Math.abs(lumaLeft - lumaRight) > 40) {
-      // Significant shadow detected - This ruins skin analysis accuracy
-      status = 'WARNING';
-      message = "Uneven Shadow";
-      instruction = "Face light directly";
   }
 
-  // 3. Stability (Guidance Only)
   if (lastFacePos) {
       const dist = Math.sqrt(Math.pow(cx - lastFacePos.cx, 2) + Math.pow(cy - lastFacePos.cy, 2));
       if (dist > width * 0.15) { 
@@ -79,7 +54,6 @@ export const validateFrame = (
       }
   }
 
-  // Always return isGood=true if face is detected, regardless of quality
   return { isGood: true, message, facePos: { cx, cy }, instruction, status };
 };
 
@@ -109,48 +83,107 @@ const rgbToLab = (r: number, g: number, b: number) => {
 };
 
 /**
- * TEXTURE ENHANCEMENT ENGINE
+ * TEXTURE ENHANCEMENT & CLINICAL OVERLAY ENGINE
+ * HD Tech Look: No drawn lines, only precise pinpointing.
  */
+export const applyClinicalOverlays = (
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number
+) => {
+    // 1. Detection
+    const { cx, cy, faceWidth, faceHeight } = detectFaceBounds(ctx, width, height);
+    if (faceWidth === 0) return;
+
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const data = imageData.data;
+    const stats = getSkinStats(imageData);
+
+    // 2. HD Enhancement (Selective Contrast Boost)
+    // We boost contrast slightly on skin areas to make imperfections visible without blurring.
+    // AND we tint red areas slightly redder to make them pop for the user to see.
+    for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i+1];
+        const b = data[i+2];
+        
+        // Simple skin check to avoid background enhancement
+        if (r > 60 && g > 40 && b > 20 && r > g) {
+            // Contrast Boost
+            // (value - 128) * factor + 128
+            const factor = 1.1; // 10% boost
+            data[i] = Math.min(255, Math.max(0, (r - 128) * factor + 128));
+            data[i+1] = Math.min(255, Math.max(0, (g - 128) * factor + 128));
+            data[i+2] = Math.min(255, Math.max(0, (b - 128) * factor + 128));
+
+            // Enhancement: If significantly red, boost red channel to make it obvious
+            const { a } = rgbToLab(r, g, b);
+            if (a > stats.meanA + 10) {
+                 data[i] = Math.min(255, data[i] + 20); // Boost Red
+            }
+        }
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    // 3. Technical Pinpointing (Crosshairs)
+    // No drawn facial zones (no Bezier curves).
+    // Just crisp pixel markers.
+    
+    ctx.lineWidth = 1; // hairline
+    const scanStep = 6; 
+    
+    for (let y = Math.floor(cy - faceHeight * 0.45); y < cy + faceHeight * 0.5; y += scanStep) {
+        for (let x = Math.floor(cx - faceWidth * 0.45); x < cx + faceWidth * 0.45; x += scanStep) {
+            
+            if (x < 0 || x >= width || y < 0 || y >= height) continue;
+
+            // Elliptical mask
+            const dx_ = (x - cx) / (faceWidth * 0.5);
+            const dy_ = (y - cy) / (faceHeight * 0.55);
+            if (dx_*dx_ + dy_*dy_ > 1) continue;
+
+            const i = (y * width + x) * 4;
+            const r = data[i];
+            const g = data[i+1];
+            const b = data[i+2];
+
+            if (!isSkinPixel(r,g,b)) continue;
+
+            const { L, a } = rgbToLab(r,g,b);
+
+            // Inflammation / Acne (Red Crosshair)
+            if (a > stats.meanA + 15) {
+                const size = 3;
+                ctx.strokeStyle = 'rgba(255, 60, 60, 0.6)'; // Crisp Red
+                ctx.beginPath();
+                ctx.moveTo(x - size, y); ctx.lineTo(x + size, y);
+                ctx.moveTo(x, y - size); ctx.lineTo(x, y + size);
+                ctx.stroke();
+            }
+            // Pores / Dark Spots (Cyan Crosshair - Technical Look)
+            else if (L < stats.meanL - 25) {
+                 const size = 2;
+                 ctx.fillStyle = 'rgba(0, 255, 255, 0.5)'; // Tech Cyan dot
+                 ctx.fillRect(x, y, 1.5, 1.5);
+            }
+        }
+    }
+};
+
 export const enhanceSkinTexture = (
     ctx: CanvasRenderingContext2D,
     width: number,
     height: number
 ): ImageData => {
-    const imageData = ctx.getImageData(0, 0, width, height);
-    const data = imageData.data;
-    const output = new Uint8ClampedArray(data.length);
-    const kernel = [0, -1, 0, -1, 5, -1, 0, -1, 0];
-
-    for (let y = 1; y < height - 1; y++) {
-        for (let x = 1; x < width - 1; x++) {
-            const idx = (y * width + x) * 4;
-            let r = 0, g = 0, b = 0;
-            for (let ky = -1; ky <= 1; ky++) {
-                for (let kx = -1; kx <= 1; kx++) {
-                    const kidx = ((y + ky) * width + (x + kx)) * 4;
-                    const weight = kernel[(ky + 1) * 3 + (kx + 1)];
-                    r += data[kidx] * weight;
-                    g += data[kidx + 1] * weight;
-                    b += data[kidx + 2] * weight;
-                }
-            }
-            output[idx] = Math.min(255, Math.max(0, ((r) - 128) * 1.1 + 128));
-            output[idx + 1] = Math.min(255, Math.max(0, ((g) - 128) * 1.1 + 128));
-            output[idx + 2] = Math.min(255, Math.max(0, ((b) - 128) * 1.1 + 128));
-            output[idx + 3] = 255;
-        }
-    }
-    return new ImageData(output, width, height);
+    return ctx.getImageData(0, 0, width, height);
 };
 
-/**
- * CLINICAL IMPERFECTION MAPPING
- */
 export const drawImperfectionMap = (
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number
 ) => {
+    // Legacy mapping - kept if needed for other views, but main flow uses applyClinicalOverlays
     const imageData = ctx.getImageData(0, 0, width, height);
     const data = imageData.data;
     const stats = getSkinStats(imageData);
@@ -164,10 +197,10 @@ export const drawImperfectionMap = (
 
         const { L, a } = rgbToLab(r, g, b);
 
-        if (a > stats.meanA + 10) { // Redness
+        if (a > stats.meanA + 10) { 
              data[i] = Math.min(255, r + 40); 
              data[i+1] = Math.max(0, g - 20);
-        } else if (L < stats.meanL - 15) { // Dark spots
+        } else if (L < stats.meanL - 15) { 
              data[i+2] = Math.min(255, b + 60); 
         }
     }
@@ -193,7 +226,7 @@ const detectFaceBounds = (ctx: CanvasRenderingContext2D, width: number, height: 
         }
     }
 
-    if (count < 50) return { cx: width/2, cy: height/2, faceWidth: 0, faceHeight: 0 }; // Return 0 to signal no face
+    if (count < 50) return { cx: width/2, cy: height/2, faceWidth: 0, faceHeight: 0 }; 
 
     const cx = sumX / count;
     const cy = sumY / count;
@@ -210,8 +243,6 @@ const getNormalizedROI = (ctx: CanvasRenderingContext2D, x: number, y: number, w
     return ctx.getImageData(x, y, w, h); 
 };
 
-// --- ADAPTIVE ALGORITHMS ---
-
 function getSkinStats(img: ImageData) {
     let sumL = 0, sumA = 0;
     let count = 0;
@@ -224,6 +255,7 @@ function getSkinStats(img: ImageData) {
     return { meanL: sumL / count, meanA: sumA / count };
 }
 
+// ... (Rest of algorithms kept as is) ...
 // 1. Redness
 function calculateRedness(img: ImageData): number {
     const stats = getSkinStats(img);
@@ -363,7 +395,6 @@ export const analyzeSkinFrame = (
   const { cx, cy, faceWidth, faceHeight } = detectFaceBounds(ctx, width, height);
   const roiSize = Math.floor(faceWidth * 0.25); 
 
-  // Define ROIs
   const foreheadY = cy - faceHeight * 0.35;
   const cheekY = cy + faceHeight * 0.05;
   const eyeY = cy - faceHeight * 0.12;
@@ -377,7 +408,6 @@ export const analyzeSkinFrame = (
   const noseData = getNormalizedROI(ctx, cx - roiSize/2, noseY, roiSize, roiSize * 0.5);
   const jawData = getNormalizedROI(ctx, cx - roiSize, jawY, roiSize*2, roiSize * 0.4);
 
-  // Run Analysis
   const redness = calculateRedness(leftCheekData);
   const { active: acneActive, scars: acneScars } = calculateBlemishes(leftCheekData);
   const { fine: wrinkleFine, deep: wrinkleDeep } = calculateWrinkles(foreheadData);
@@ -432,7 +462,6 @@ export const drawBiometricOverlay = (
   metrics: SkinMetrics
 ) => {
   const { cx, cy, faceWidth } = detectFaceBounds(ctx, width, height);
-  // Just a simple overlay
   ctx.strokeStyle = "rgba(16, 185, 129, 0.4)"; 
   ctx.lineWidth = 2;
   ctx.beginPath();

@@ -1,4 +1,6 @@
 
+
+
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { SkinMetrics, Product, UserProfile } from '../types';
 import { auditProduct } from '../services/geminiService';
@@ -14,12 +16,10 @@ interface MetricRingProps {
 }
 
 const MetricRing: React.FC<MetricRingProps> = ({ label, value, metricKey, onSelect }) => {
-  // Management by Exception Color Logic
-  let colorClass = "text-zinc-300"; // Default / Average
-  if (value < 60) colorClass = "text-rose-500"; // Critical
-  else if (value > 89) colorClass = "text-emerald-500"; // Excellent
+  let colorClass = "text-zinc-300"; 
+  if (value < 60) colorClass = "text-rose-500"; 
+  else if (value > 89) colorClass = "text-emerald-500"; 
   
-  // Animation state
   const [displayValue, setDisplayValue] = useState(0);
   const [isVisible, setIsVisible] = useState(false);
   const elementRef = useRef<HTMLButtonElement>(null);
@@ -29,10 +29,10 @@ const MetricRing: React.FC<MetricRingProps> = ({ label, value, metricKey, onSele
           ([entry]) => {
               if (entry.isIntersecting) {
                   setIsVisible(true);
-                  observer.disconnect(); // Trigger once
+                  observer.disconnect(); 
               }
           },
-          { threshold: 0.1 } // Start when 10% visible
+          { threshold: 0.1 } 
       );
 
       if (elementRef.current) {
@@ -45,7 +45,6 @@ const MetricRing: React.FC<MetricRingProps> = ({ label, value, metricKey, onSele
   useEffect(() => {
       if (!isVisible) return;
 
-      // Animate value on view
       let start = 0;
       const duration = 1500;
       const startTime = performance.now();
@@ -53,7 +52,6 @@ const MetricRing: React.FC<MetricRingProps> = ({ label, value, metricKey, onSele
       const animate = (time: number) => {
           const elapsed = time - startTime;
           const progress = Math.min(elapsed / duration, 1);
-          // Ease Out Quart
           const ease = 1 - Math.pow(1 - progress, 4);
           
           setDisplayValue(Math.round(start + (value - start) * ease));
@@ -78,7 +76,6 @@ const MetricRing: React.FC<MetricRingProps> = ({ label, value, metricKey, onSele
                     stroke="currentColor"
                     strokeWidth="8" 
                   />
-                  {/* Animated Stroke */}
                   <circle
                     cx="50" cy="50" r="40"
                     className={`${colorClass} transition-all duration-1000 ease-out`}
@@ -163,7 +160,6 @@ const MetricModal: React.FC<MetricModalProps> = ({ metric, score, age, observati
         const location = ROIMap[metric] || 'Facial area';
         const severity = score < 60 ? 'Significant' : score < 80 ? 'Mild' : 'Minimal';
         
-        // Detailed Fallbacks
         if (metric === 'poreSize') return `${severity} enlargement detected on ${location} based on shadow analysis.`;
         if (metric === 'acneActive') return `${severity} inflammatory markers detected on ${location}.`;
         if (metric === 'redness') return `${severity} vascular reactivity observed on ${location}.`;
@@ -174,7 +170,6 @@ const MetricModal: React.FC<MetricModalProps> = ({ metric, score, age, observati
         return `${severity} biometric markers detected on ${location} needing attention.`;
     }
 
-    // Simplified Display terms
     const getDisplayTerm = (m: string) => {
         if (m === 'acneActive') return 'Acne';
         if (m === 'wrinkleFine') return 'Fine Lines';
@@ -241,7 +236,6 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
   const [complexity, setComplexity] = useState<'BASIC' | 'ADVANCED'>(userProfile.preferences?.complexity === 'ADVANCED' ? 'ADVANCED' : 'BASIC');
   const [isStrategyDismissed, setIsStrategyDismissed] = useState(false);
   
-  // Intersection Observer for Radar Chart
   const [isChartVisible, setIsChartVisible] = useState(false);
   const chartRef = useRef<HTMLDivElement>(null);
 
@@ -262,12 +256,7 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
   const calculatedSkinType = useMemo(() => {
       const parts = [];
       const isSensitive = metrics.redness < 60;
-      
-      // FIX: Prioritize Dryness over Oiliness when hydration is critically low.
-      // Computer vision often mistakes peeling skin (white flakes) for shine/oil due to high reflectivity.
-      // If hydration is critically low (<45), it is almost certainly Dry/Peeling, not Oily.
       const isCriticallyDry = metrics.hydration < 45;
-      
       const isOily = metrics.oiliness < 50;
       const isDry = metrics.hydration < 55;
       
@@ -313,7 +302,6 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
       const isAcneCritical = metrics.acneActive < 60;
       const isBarrierCritical = metrics.redness < 55 || metrics.hydration < 50;
 
-      // Conflict 1: Wants Anti-Aging, but has Acne
       if (primaryGoal === 'Look Younger & Firm' || primaryGoal === 'Brighten Dark Spots') {
           if (isAcneCritical) return {
               type: 'CONFLICT',
@@ -323,7 +311,6 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
           };
       }
       
-      // Conflict 2: Wants Anti-Aging/Brightening, but has damaged barrier
       if (primaryGoal !== 'Smooth & Hydrated Skin' && isBarrierCritical) {
           return {
               type: 'CONFLICT',
@@ -365,7 +352,6 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
   };
 
   const prescription = useMemo(() => {
-    // 1. Base Scores
     let rankedConcerns = [
         { id: 'acneActive', score: metrics.acneActive }, { id: 'acneScars', score: metrics.acneScars },
         { id: 'pigmentation', score: metrics.pigmentation }, { id: 'redness', score: metrics.redness },
@@ -376,31 +362,24 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
         { id: 'darkCircles', score: metrics.darkCircles }
     ];
 
-    // 2. Apply "Clinical Gravity" 
-    // Active conditions (Acne, Redness) are inherently heavier/more urgent than passive ones (Wrinkles)
-    // We subtract from their score to make them rank higher (since we sort ascending)
     rankedConcerns = rankedConcerns.map(c => {
-        if (c.id === 'acneActive') return { ...c, score: c.score - 15 }; // Huge priority boost
-        if (c.id === 'redness') return { ...c, score: c.score - 10 };   // Priority boost
+        if (c.id === 'acneActive') return { ...c, score: c.score - 15 }; 
+        if (c.id === 'redness') return { ...c, score: c.score - 10 };   
         return c;
     });
 
-    // 3. User Preference Nudge (Minor)
-    // We do NOT let preference override critical issues (score < 50), but we use it for tie-breaking
     const goals = userProfile.preferences?.goals || [];
     if (goals.length > 0) {
         if (goals.includes('Look Younger & Firm')) {
              const idx = rankedConcerns.findIndex(c => c.id === 'wrinkleFine');
-             if (idx > -1) rankedConcerns[idx].score -= 5; // Slight nudges only
+             if (idx > -1) rankedConcerns[idx].score -= 5;
         }
         if (goals.includes('Clear Acne & Blemishes')) {
              const idx = rankedConcerns.findIndex(c => c.id === 'acneActive');
              if (idx > -1) rankedConcerns[idx].score -= 5;
         }
-        // ... add others
     }
 
-    // 4. Sort: Lowest score = Highest Priority
     rankedConcerns.sort((a, b) => a.score - b.score);
     const topConcerns = rankedConcerns.slice(0, 3);
 
@@ -447,7 +426,6 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
         'TREATMENT': ['Benzoyl Peroxide', 'Salicylic Acid', 'Adapalene', 'Azelaic Acid', 'Retinol', 'Tretinoin', 'Sulfur']
     };
 
-    // Helper: Determine Ideal Texture/Formulation based on Skin Type
     const getFormulation = (step: string): string => {
         const isOily = metrics.oiliness < 50;
         const isDry = metrics.hydration < 55 || metrics.oiliness > 80;
@@ -481,9 +459,7 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
         }
     };
 
-    // Global Routine Solver
-    // 1. Sort prescriptions by urgency
-    const sortedActiveNeeds = [...prescription.ingredients]; // Already ranked
+    const sortedActiveNeeds = [...prescription.ingredients]; 
 
     const slotsToFill = [
         { key: 'SERUM_PM', type: 'SERUM', time: 'PM' },
@@ -497,12 +473,10 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
         { key: 'SPF_AM', type: 'SPF', time: 'AM' }
     ];
 
-    // Auto-fill slots
     slotsToFill.forEach(slot => {
         const potentialMatches: { name: string, action: string }[] = [];
         const formulation = getFormulation(slot.type);
 
-        // Try to place a prescribed active
         for (const ing of sortedActiveNeeds) {
             if (usedIngredients.has(ing.name)) continue;
             
@@ -530,7 +504,6 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
                 actionType: slot.type === 'CLEANSER' ? 'Wash-off Treatment' : 'Leave-on Active'
             };
         } else {
-            // Fallback Logic
             let fallbackBenefit = "Maintenance";
             let fallbackIngs = [] as string[];
             
@@ -685,31 +658,29 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
 
   return (
     <div className="space-y-12 pb-32">
-        {/* HERO SELFIE - Full width clean look */}
+        {/* HERO SELFIE - UPDATED FOR CLEARER OVERLAY VISIBILITY */}
         <div className="modern-card rounded-[2.5rem] overflow-hidden relative group hover:shadow-2xl transition-shadow duration-500">
-            <div className="relative w-full overflow-hidden aspect-[4/5] sm:aspect-[16/9]">
+            <div className="relative w-full overflow-hidden aspect-[4/5] sm:aspect-[16/9] bg-black">
                  {userProfile.faceImage ? (
-                    <img src={userProfile.faceImage} className="w-full h-full object-cover transform transition-transform duration-[2s] group-hover:scale-105" alt="Scan" />
+                    <img src={userProfile.faceImage} className="w-full h-full object-cover opacity-100" alt="Clinical Scan" />
                  ) : (
-                    <div className="w-full h-full bg-zinc-100 flex items-center justify-center text-zinc-300">No Image</div>
+                    <div className="w-full h-full bg-zinc-900 flex items-center justify-center text-zinc-500 font-mono text-xs uppercase">No Clinical Data</div>
                  )}
-                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-60" />
+                 {/* Removed gradient overlay to keep face lines clear, only slight fade at bottom for text */}
+                 <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 to-transparent" />
                  
-                 {/* Tech Overlay Grid Effect on Hover */}
-                 <div className="absolute inset-0 opacity-0 group-hover:opacity-10 transition-opacity duration-500 bg-[linear-gradient(rgba(255,255,255,0.1)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.1)_1px,transparent_1px)] bg-[size:20px_20px]" />
-                 
-                 <button onClick={onRescan} className="absolute top-6 right-6 z-20 bg-white/20 backdrop-blur-md text-white px-5 py-2.5 rounded-full flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest hover:bg-white/30 transition-colors border border-white/20">
+                 <button onClick={onRescan} className="absolute top-6 right-6 z-20 bg-black/40 backdrop-blur-md text-white px-5 py-2.5 rounded-full flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest hover:bg-black/60 transition-colors border border-white/10 shadow-lg">
                     <RefreshCw size={12} /> Rescan
                  </button>
 
                  <div className="absolute bottom-8 left-8 text-white w-full pr-8 flex justify-between items-end">
                      <div className="tech-reveal">
-                         <span className="text-[10px] font-bold opacity-70 uppercase tracking-widest mb-1 block">Skin Health Score</span>
-                         <span className="text-6xl font-black tracking-tighter">{metrics.overallScore}</span>
+                         <span className="text-[10px] font-bold text-teal-300 uppercase tracking-widest mb-1 block">Clinical Grade</span>
+                         <span className="text-6xl font-black tracking-tighter text-white">{metrics.overallScore}</span>
                      </div>
-                     <div className="bg-white/10 backdrop-blur-md px-4 py-2 rounded-xl border border-white/20 text-right tech-reveal delay-100">
-                         <span className="text-[9px] font-bold opacity-70 uppercase tracking-widest block mb-1">Skin Type</span>
-                         <span className="text-sm font-bold tracking-wide flex items-center justify-end gap-2">
+                     <div className="bg-black/40 backdrop-blur-md px-4 py-2 rounded-xl border border-white/10 text-right tech-reveal delay-100">
+                         <span className="text-[9px] font-bold text-teal-300 uppercase tracking-widest block mb-1">Skin Type</span>
+                         <span className="text-sm font-bold tracking-wide flex items-center justify-end gap-2 text-white">
                             <Fingerprint size={14} className="text-teal-400" />
                             {calculatedSkinType}
                          </span>
@@ -718,7 +689,6 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
             </div>
             
             <div className="p-8">
-                {/* CLINICAL VERDICT */}
                 <div className="mb-6 tech-reveal delay-200">
                     <div className="flex items-center justify-between mb-3">
                          <h3 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2">
@@ -737,12 +707,10 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
                     </div>
                 </div>
 
-                {/* STRATEGY INSIGHT (Goal Conflict) */}
                 {strategyInsight && !isStrategyDismissed && (
                     <div className="mb-8 tech-reveal delay-300">
                         <div className={`modern-card rounded-[1.5rem] overflow-hidden group relative transition-all duration-300 ${strategyInsight.type === 'CONFLICT' ? 'border-cyan-100 hover:border-cyan-200' : 'border-emerald-100 hover:border-emerald-200'}`}>
                             
-                            {/* Dismiss Button */}
                             <button 
                                 onClick={(e) => {
                                     e.stopPropagation();
@@ -753,7 +721,6 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
                                 <X size={14} />
                             </button>
 
-                            {/* Accent Strip */}
                             <div className={`absolute top-0 bottom-0 left-0 w-1 ${strategyInsight.type === 'CONFLICT' ? 'bg-cyan-500' : 'bg-emerald-500'}`} />
                             
                             <div className="p-6 pl-7">
@@ -815,7 +782,6 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
             </div>
         </div>
 
-        {/* RADAR CHART - Tech Obsidian Style with Interactive Zoom */}
         <div ref={chartRef} className="modern-card rounded-[2.5rem] p-10 flex flex-col items-center relative overflow-hidden animate-in slide-in-from-bottom-8 duration-700 delay-100 chart-container group cursor-crosshair">
              <h3 className="text-xs font-black text-zinc-900 uppercase tracking-widest mb-10">Balance Matrix</h3>
              
@@ -825,7 +791,6 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
                         <circle key={r} cx="60" cy="60" r={r/2} fill="none" stroke="#F4F4F5" strokeWidth="1" className={isChartVisible ? "draw-stroke" : "opacity-0"} />
                      ))}
                      
-                     {/* Web lines */}
                      {[0, 60, 120, 180, 240, 300].map(deg => {
                          const rad = deg * Math.PI / 180;
                          return <line key={deg} x1="60" y1="60" x2={60 + 30*Math.cos(rad)} y2={60 + 30*Math.sin(rad)} stroke="#F4F4F5" strokeWidth="1" className={isChartVisible ? "draw-stroke" : "opacity-0"} />
@@ -863,7 +828,6 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
              </div>
         </div>
 
-        {/* METRICS - Spacious Layout with Smart Colors */}
         <div className="space-y-6">
              <GroupSection title="Blemishes" score={groupAnalysis.blemishScore} delayClass="delay-150">
                  <MetricRing label="Acne" value={metrics.acneActive} metricKey="acneActive" onSelect={setSelectedMetric} />
@@ -884,7 +848,6 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
                  <MetricRing label="Wrinkles" value={metrics.wrinkleDeep} metricKey="wrinkleDeep" onSelect={setSelectedMetric} />
                  <MetricRing label="Firmness" value={metrics.sagging} metricKey="sagging" onSelect={setSelectedMetric} />
                  <MetricRing label="Spots" value={metrics.pigmentation} metricKey="pigmentation" onSelect={setSelectedMetric} />
-                 {/* 5th item doesn't fit grid-cols-4 well, but we'll leave it or user scroll */}
                  <div className="col-span-4 mt-2 border-t border-zinc-50 pt-2 flex justify-center">
                     <div className="w-1/4">
                         <MetricRing label="Dark Circles" value={metrics.darkCircles} metricKey="darkCircles" onSelect={setSelectedMetric} />
@@ -893,10 +856,7 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
              </GroupSection>
         </div>
 
-        {/* ROUTINE */}
         <div className="pt-8 animate-in slide-in-from-bottom-8 duration-700 delay-500 relative">
-            
-            {/* Animated Connecting Line */}
             <div className="absolute top-24 bottom-12 left-[2.25rem] w-px bg-zinc-200 z-0 hidden sm:block origin-top animate-[scaleY_1s_ease-out_forwards] delay-700" style={{ transform: 'scaleY(0)', animationFillMode: 'forwards' }}></div>
 
             <div className="flex justify-between items-center mb-8 px-2 tech-reveal">
