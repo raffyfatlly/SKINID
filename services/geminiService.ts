@@ -8,7 +8,7 @@ const getAI = () => {
   const apiKey = process.env.API_KEY || '';
   
   if (!apiKey) {
-      console.warn("API Key is missing in environment. Falling back to offline mode.");
+      console.warn("CRITICAL: API Key is missing. If you are on Vercel, go to Settings > Environment Variables and add 'API_KEY'. Then Redeploy.");
   }
 
   return new GoogleGenAI({ apiKey: apiKey });
