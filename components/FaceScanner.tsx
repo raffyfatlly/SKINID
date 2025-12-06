@@ -1,5 +1,6 @@
+
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { Sparkles, Image as ImageIcon, ArrowLeft, ScanFace, BrainCircuit } from 'lucide-react';
+import { Sparkles, Image as ImageIcon, ScanFace, BrainCircuit, Target, Lightbulb, CheckCircle2 } from 'lucide-react';
 import { analyzeSkinFrame, drawBiometricOverlay, validateFrame, enhanceSkinTexture, drawImperfectionMap } from '../services/visionService';
 import { analyzeFaceSkin } from '../services/geminiService';
 import { SkinMetrics } from '../types';
@@ -23,11 +24,14 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
   const cachedMetricsRef = useRef<SkinMetrics | null>(null);
   
   const [isScanning, setIsScanning] = useState(false);
-  const [isProcessingAI, setIsProcessingAI] = useState(false); // New AI State
-  const [aiProgress, setAiProgress] = useState(0); // For AI Loading Bar
+  const [isProcessingAI, setIsProcessingAI] = useState(false); 
+  const [aiProgress, setAiProgress] = useState(0); 
   const [streamError, setStreamError] = useState<string | null>(null);
   const [instruction, setInstruction] = useState<string>("Align Face");
   const [capturedSnapshot, setCapturedSnapshot] = useState<string | null>(null);
+  
+  // Focus Logic
+  const [showFocusTarget, setShowFocusTarget] = useState<{x: number, y: number} | null>(null);
 
   useEffect(() => {
     let currentStream: MediaStream | null = null;
@@ -35,25 +39,13 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
 
     const startCamera = async () => {
       try {
-        let stream;
-        // Try to get advanced focus control
-        try {
-            const constraints: MediaStreamConstraints = {
-                video: { 
-                    facingMode: 'user', 
-                    width: { ideal: 1920 }, // High Res for better texture
-                    height: { ideal: 1080 },
-                    // @ts-ignore - 'advanced' is standard but TS might complain
-                    advanced: [{ focusMode: 'continuous' }] 
-                }
-            };
-            stream = await navigator.mediaDevices.getUserMedia(constraints);
-        } catch (e) {
-            // Fallback
-            stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'user' }
-            });
-        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { 
+                facingMode: 'user', 
+                width: { ideal: 1920 }, 
+                height: { ideal: 1080 }
+            }
+        });
 
         if (!isMounted) {
             stream.getTracks().forEach(track => track.stop());
@@ -91,33 +83,34 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
           setAiProgress(0);
           interval = setInterval(() => {
               setAiProgress(prev => {
-                  if (prev >= 90) return prev; // Stall at 90% until promise resolves
-                  // Variable speed to feel realistic
-                  const boost = prev < 30 ? 2 : prev < 70 ? 1 : 0.5;
-                  return prev + boost;
+                  if (prev >= 90) return prev; 
+                  return prev + 2;
               });
           }, 50);
       }
       return () => clearInterval(interval);
   }, [isProcessingAI]);
 
+  // Handle Manual Focus Tap
+  const handleTapToFocus = async (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
+      if (!videoRef.current || !videoRef.current.srcObject) return;
+      
+      const rect = (e.target as HTMLElement).getBoundingClientRect();
+      const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
+      const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
+      
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+
+      setShowFocusTarget({ x, y });
+      setTimeout(() => setShowFocusTarget(null), 1000);
+  };
+
   const calculateAverageMetrics = (buffer: SkinMetrics[]): SkinMetrics => {
       if (buffer.length === 0) return { 
-          overallScore: 70, 
-          acneActive: 70, 
-          acneScars: 70, 
-          poreSize: 70, 
-          blackheads: 70, 
-          wrinkleFine: 70, 
-          wrinkleDeep: 70, 
-          sagging: 70, 
-          pigmentation: 70, 
-          redness: 70, 
-          texture: 70, 
-          hydration: 70, 
-          oiliness: 70, 
-          darkCircles: 70, 
-          timestamp: Date.now() 
+          overallScore: 70, acneActive: 70, acneScars: 70, poreSize: 70, blackheads: 70, 
+          wrinkleFine: 70, wrinkleDeep: 70, sagging: 70, pigmentation: 70, redness: 70, 
+          texture: 70, hydration: 70, oiliness: 70, darkCircles: 70, timestamp: Date.now() 
       };
 
       const sum = buffer.reduce((acc, curr) => ({
@@ -137,21 +130,9 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
           darkCircles: acc.darkCircles + curr.darkCircles,
           timestamp: 0
       }), { 
-          overallScore: 0, 
-          acneActive: 0, 
-          acneScars: 0, 
-          poreSize: 0, 
-          blackheads: 0, 
-          wrinkleFine: 0, 
-          wrinkleDeep: 0, 
-          sagging: 0, 
-          pigmentation: 0, 
-          redness: 0, 
-          texture: 0, 
-          hydration: 0, 
-          oiliness: 0, 
-          darkCircles: 0, 
-          timestamp: 0 
+          overallScore: 0, acneActive: 0, acneScars: 0, poreSize: 0, blackheads: 0, 
+          wrinkleFine: 0, wrinkleDeep: 0, sagging: 0, pigmentation: 0, redness: 0, 
+          texture: 0, hydration: 0, oiliness: 0, darkCircles: 0, timestamp: 0 
       });
 
       const len = buffer.length;
@@ -170,7 +151,7 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
           hydration: Math.round(sum.hydration / len),
           oiliness: Math.round(sum.oiliness / len),
           darkCircles: Math.round(sum.darkCircles / len),
-          observations: buffer[buffer.length-1].observations, // Carry over observations if present
+          observations: buffer[buffer.length-1].observations,
           timestamp: Date.now()
       };
   };
@@ -191,19 +172,14 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
           ctx.drawImage(source, 0, 0, captureCanvas.width, captureCanvas.height);
           if (flip) ctx.setTransform(1, 0, 0, 1, 0, 0);
           
-          // 1. Apply Texture Enhancement (Sharpening/Contrast)
           const enhancedImageData = enhanceSkinTexture(ctx, width, height);
           ctx.putImageData(enhancedImageData, 0, 0);
-
-          // 2. Draw IMPERFECTION MAP instead of Biometric Overlay
           drawImperfectionMap(ctx, captureCanvas.width, captureCanvas.height);
-          
           return captureCanvas.toDataURL('image/jpeg', 0.95);
       }
       return '';
   };
   
-  // Helper to get raw image for AI (Optimized for Machine Vision)
   const captureRawImage = (source: HTMLVideoElement | HTMLImageElement, flip: boolean): string => {
       const captureCanvas = document.createElement('canvas');
       const width = source instanceof HTMLVideoElement ? source.videoWidth : source.naturalWidth;
@@ -217,11 +193,6 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
               ctx.scale(-1, 1);
           }
           ctx.drawImage(source, 0, 0, width, height);
-
-          // ENHANCE FOR AI
-          const enhancedImageData = enhanceSkinTexture(ctx, width, height);
-          ctx.putImageData(enhancedImageData, 0, 0);
-          
           return captureCanvas.toDataURL('image/jpeg', 0.95);
       }
       return '';
@@ -230,14 +201,11 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
-      
-      setIsProcessingAI(true); // Start AI loader immediately for upload
-      
+      setIsProcessingAI(true);
       const reader = new FileReader();
       reader.onload = (event) => {
           const img = new Image();
           img.onload = () => {
-              // 1. Convert to Base64
               const canvas = document.createElement('canvas');
               const maxDim = 1920;
               let w = img.naturalWidth;
@@ -252,22 +220,15 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
               const ctx = canvas.getContext('2d');
               if (ctx) {
                   ctx.drawImage(img, 0, 0, w, h);
-
-                  // ENHANCE UPLOADED PHOTO TOO
                   const enhancedImageData = enhanceSkinTexture(ctx, w, h);
                   ctx.putImageData(enhancedImageData, 0, 0);
-
                   const rawBase64 = canvas.toDataURL('image/jpeg', 0.9);
                   
-                  // 2. Analyze with Gemini
                   analyzeFaceSkin(rawBase64).then(aiMetrics => {
-                      setAiProgress(100); // Complete bar
-                      // 3. Create display snapshot
-                      // Draw IMPERFECTION MAP for upload display as well
+                      setAiProgress(100);
                       drawImperfectionMap(ctx, w, h); 
-                      
                       const displaySnapshot = canvas.toDataURL('image/jpeg', 0.9);
-                      setTimeout(() => { // Small delay to show 100%
+                      setTimeout(() => {
                         onScanComplete(aiMetrics, displaySnapshot);
                         setIsProcessingAI(false);
                       }, 500);
@@ -290,7 +251,6 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     
-    // Time delta calculation for smooth, constant progress
     const now = performance.now();
     const deltaTime = now - lastTimeRef.current;
     lastTimeRef.current = now;
@@ -299,78 +259,67 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
       
-      // Draw video frame
       ctx.translate(canvas.width, 0);
       ctx.scale(-1, 1);
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       
       const check = validateFrame(ctx, canvas.width, canvas.height, lastFacePos.current);
-      setInstruction(prev => prev !== check.message ? check.message : prev); // Only update state if changed
-      
-      if (check.facePos) lastFacePos.current = check.facePos;
+      setInstruction(check.instruction || check.message);
 
-      // --- THROTTLED HEAVY ANALYSIS ---
-      // Run deep analysis only every 150ms to keep 60fps UI
-      let currentMetrics = cachedMetricsRef.current;
-      if (!currentMetrics || (now - lastAnalysisTimeRef.current > 150)) {
-          // Perform heavy CV
-          currentMetrics = analyzeSkinFrame(ctx, canvas.width, canvas.height);
-          cachedMetricsRef.current = currentMetrics;
-          lastAnalysisTimeRef.current = now;
-          
-          if (check.isGood) {
-              metricsBuffer.current.push(currentMetrics);
-              if (metricsBuffer.current.length > 40) metricsBuffer.current.shift();
-          }
-      }
-      
-      // Draw the AR Overlay using cached metrics (fast)
-      if (currentMetrics) {
-          drawBiometricOverlay(ctx, canvas.width, canvas.height, currentMetrics);
-      }
-
-      // --- SMOOTH PROGRESS UPDATE ---
-      // Always update progress if conditions are met, completely decoupled from analysis frame rate
+      // CRITICAL FIX: If we see a face (isGood=true), ALWAYS progress.
       if (check.isGood) {
-          const SCAN_DURATION = 6500; // 6.5 seconds
+          const SCAN_DURATION = 3000; 
           const increment = (deltaTime / SCAN_DURATION) * 100;
           progressRef.current = Math.min(100, progressRef.current + increment);
+          
+          if (check.facePos) lastFacePos.current = check.facePos;
+      }
 
-          // Direct DOM manipulation for butter smooth 60fps animation
-          if (circleRef.current) {
-              const radius = 130;
-              const circumference = 2 * Math.PI * radius;
-              const offset = circumference - (progressRef.current / 100) * circumference;
-              circleRef.current.style.strokeDashoffset = `${offset}`;
+      // Run Analysis Throttled
+      if (now - lastAnalysisTimeRef.current > 200) {
+          const metrics = analyzeSkinFrame(ctx, canvas.width, canvas.height);
+          cachedMetricsRef.current = metrics;
+          lastAnalysisTimeRef.current = now;
+          if (check.isGood) {
+              metricsBuffer.current.push(metrics);
+              if (metricsBuffer.current.length > 20) metricsBuffer.current.shift();
           }
+      }
+      
+      if (cachedMetricsRef.current) {
+          drawBiometricOverlay(ctx, canvas.width, canvas.height, cachedMetricsRef.current);
+      }
 
-          if (progressRef.current >= 100) {
-               // STOP & PROCESS
-               setIsScanning(false);
-               setIsProcessingAI(true); // Trigger AI Loader
-               
-               const rawImage = captureRawImage(video, true);
-               const avgLocalMetrics = calculateAverageMetrics(metricsBuffer.current);
-               const displayImage = captureSnapshot(video, avgLocalMetrics, true);
-               
-               setCapturedSnapshot(displayImage);
+      // Update UI Ring
+      if (circleRef.current) {
+          const radius = 130;
+          const circumference = 2 * Math.PI * radius;
+          const offset = circumference - (progressRef.current / 100) * circumference;
+          circleRef.current.style.strokeDashoffset = `${offset}`;
+      }
 
-               analyzeFaceSkin(rawImage).then(aiMetrics => {
-                   setAiProgress(100);
-                   setTimeout(() => {
-                       onScanComplete(aiMetrics, displayImage);
-                   }, 500);
-               }).catch(err => {
-                   console.error("AI Failed, falling back", err);
-                   setAiProgress(100);
-                   setTimeout(() => {
-                       onScanComplete(avgLocalMetrics, displayImage);
-                   }, 500);
-               });
-          }
-      } 
-      // Removed Decay logic for smoother experience
+      if (progressRef.current >= 100) {
+           setIsScanning(false);
+           setIsProcessingAI(true);
+           const rawImage = captureRawImage(video, true);
+           const avgLocalMetrics = calculateAverageMetrics(metricsBuffer.current);
+           const displayImage = captureSnapshot(video, avgLocalMetrics, true);
+           setCapturedSnapshot(displayImage);
+
+           analyzeFaceSkin(rawImage).then(aiMetrics => {
+               setAiProgress(100);
+               setTimeout(() => {
+                   onScanComplete(aiMetrics, displayImage);
+               }, 500);
+           }).catch(err => {
+               console.error("AI Failed", err);
+               setAiProgress(100);
+               setTimeout(() => {
+                   onScanComplete(avgLocalMetrics, displayImage);
+               }, 500);
+           });
+      }
     }
 
     if (isScanning && !isProcessingAI) {
@@ -385,34 +334,28 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
       progressRef.current = 0;
       cachedMetricsRef.current = null;
       lastTimeRef.current = performance.now();
-      
-      // Reset circle visually
       if (circleRef.current) {
          const radius = 130;
          const circumference = 2 * Math.PI * radius;
          circleRef.current.style.strokeDashoffset = `${circumference}`;
       }
-
       requestAnimationFrame(scanFrame);
     }
   }, [isScanning, scanFrame]);
 
   const getAIStatusText = (p: number) => {
-      if (p < 30) return "Uploading High-Res Map...";
-      if (p < 60) return "Analyzing Pore Structure...";
-      if (p < 90) return "Calculating Biological Age...";
-      return "Finalizing Report...";
+      if (p < 30) return "Processing...";
+      if (p < 60) return "Mapping Pores...";
+      if (p < 90) return "Analyzing Texture...";
+      return "Finalizing...";
   };
 
-  // Loading Screen for AI Processing
   if (isProcessingAI) {
       return (
           <div className="h-screen w-full bg-black flex flex-col items-center justify-center relative overflow-hidden font-sans">
-             {/* Background blurred snapshot if available */}
              {capturedSnapshot && (
                  <img src={capturedSnapshot} className="absolute inset-0 w-full h-full object-cover opacity-30 blur-2xl scale-110" />
              )}
-             
              <div className="relative z-10 flex flex-col items-center w-full max-w-[280px]">
                  <div className="w-24 h-24 relative mb-10">
                      <div className="absolute inset-0 bg-teal-500/30 rounded-full animate-ping duration-1000"></div>
@@ -420,49 +363,47 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
                         <BrainCircuit size={40} className="text-white animate-pulse" />
                      </div>
                  </div>
-                 
-                 <h2 className="text-3xl font-black text-white tracking-tight mb-2 text-center">Analyzing Dermis</h2>
+                 <h2 className="text-3xl font-black text-white tracking-tight mb-2 text-center">Analyzing</h2>
                  <p className="text-teal-200 text-xs font-bold tracking-widest uppercase mb-8 animate-pulse text-center">{getAIStatusText(aiProgress)}</p>
-                 
-                 {/* Progress Bar */}
-                 <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden mb-3">
-                     <div 
-                        className="h-full bg-gradient-to-r from-teal-500 via-cyan-500 to-emerald-400 transition-all duration-300 ease-out"
-                        style={{ width: `${aiProgress}%` }}
-                     />
-                 </div>
-                 <div className="text-white font-black text-xl tracking-tight">{Math.round(aiProgress)}%</div>
              </div>
           </div>
       )
   }
 
-  // Circular Progress Constants
   const radius = 130;
   const circumference = 2 * Math.PI * radius;
-  // Initial state: Full offset (Hidden/Empty)
-  const initialOffset = circumference;
 
   return (
     <div className="relative h-screen w-full bg-black overflow-hidden font-sans">
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        className="absolute inset-0 w-full h-full object-cover"
-        style={{ transform: 'scaleX(-1)' }} 
-      />
-      
-      {/* Canvas for AR Overlay */}
-      <canvas 
-        ref={canvasRef} 
-        className={`absolute inset-0 w-full h-full object-contain ${!isScanning ? 'opacity-0' : 'opacity-100'}`} 
-      />
+      <div 
+        className="absolute inset-0"
+        onClick={handleTapToFocus}
+        onTouchStart={handleTapToFocus}
+      >
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="absolute inset-0 w-full h-full object-cover"
+            style={{ transform: 'scaleX(-1)' }} 
+          />
+          <canvas 
+            ref={canvasRef} 
+            className={`absolute inset-0 w-full h-full object-contain pointer-events-none ${!isScanning ? 'opacity-0' : 'opacity-100'}`} 
+          />
+      </div>
 
       <input type="file" ref={fileInputRef} accept="image/*" className="hidden" onChange={handleFileUpload} />
 
-      {/* --- FOCUS MASK (Vignette) --- */}
+      {showFocusTarget && (
+          <div 
+            className="absolute w-16 h-16 border-2 border-teal-400 rounded-full pointer-events-none animate-ping opacity-75 z-20"
+            style={{ top: showFocusTarget.y - 32, left: showFocusTarget.x - 32 }}
+          />
+      )}
+
+      {/* MASK */}
       <div className="absolute inset-0 pointer-events-none z-10">
          <svg width="100%" height="100%" preserveAspectRatio="none">
            <defs>
@@ -475,67 +416,49 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
          </svg>
       </div>
       
-      {/* --- UI LAYER --- */}
-      <div className="absolute inset-0 z-20 flex flex-col justify-between">
-          
-          {/* Header */}
-          <div className="w-full p-6 pt-12 flex justify-between items-start">
+      {/* UI */}
+      <div className="absolute inset-0 z-20 flex flex-col justify-between pointer-events-none">
+          <div className="w-full p-6 pt-12 flex justify-between items-start pointer-events-auto">
              <div className="bg-white/10 backdrop-blur-md rounded-full px-4 py-2 border border-white/10 flex items-center gap-2">
                 <ScanFace size={16} className="text-white" />
                 <span className="text-white text-xs font-bold tracking-wider">SKIN AI</span>
              </div>
-             
-             {isScanning && (
-                <div className="bg-white/90 backdrop-blur rounded-full px-5 py-2 shadow-lg animate-in fade-in flex items-center gap-3">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    <span className="text-zinc-900 text-xs font-bold uppercase tracking-widest">{instruction}</span>
-                </div>
-             )}
           </div>
 
-          {/* Central Guide & Progress Ring */}
-          <div className="absolute top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[76vw] h-[56vh] flex items-center justify-center pointer-events-none">
-              
-              {/* The Static Guide Frame */}
-              {!isScanning && (
-                  <div className="absolute inset-0 border border-white/30 rounded-[48%] opacity-60">
-                      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-0.5 h-6 bg-white/60"></div>
-                      <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-0.5 h-6 bg-white/60"></div>
+          {isScanning && (
+              <div className="absolute top-28 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 w-full px-8">
+                  <div className="backdrop-blur-xl rounded-full px-6 py-3 shadow-lg flex items-center gap-3 bg-white/90 border border-white text-zinc-900">
+                      <Target size={18} />
+                      <span className="text-sm font-bold uppercase tracking-wide">{instruction}</span>
                   </div>
+              </div>
+          )}
+
+          <div className="absolute top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[76vw] h-[56vh] flex items-center justify-center pointer-events-none">
+              {!isScanning && (
+                  <div className="absolute inset-0 border border-white/30 rounded-[48%] opacity-60"></div>
               )}
 
-              {/* Active Scanning Progress Ring */}
               {isScanning && (
                 <svg className="w-[300px] h-[300px] absolute opacity-90 drop-shadow-2xl" style={{ transform: 'rotate(-90deg)' }}>
-                   <circle
-                      cx="150"
-                      cy="150"
-                      r={radius}
-                      stroke="rgba(255,255,255,0.1)"
-                      strokeWidth="6"
-                      fill="transparent"
-                   />
+                   <circle cx="150" cy="150" r={radius} stroke="rgba(255,255,255,0.1)" strokeWidth="6" fill="transparent" />
                    <circle
                       ref={circleRef}
-                      cx="150"
-                      cy="150"
-                      r={radius}
-                      stroke="#10B981"
+                      cx="150" cy="150" r={radius}
+                      stroke="#10B981" 
                       strokeWidth="6"
                       fill="transparent"
                       strokeDasharray={circumference}
-                      strokeDashoffset={initialOffset}
+                      strokeDashoffset={circumference}
                       strokeLinecap="round"
-                      className="shadow-[0_0_15px_#10B981]" 
+                      className="transition-all duration-300 shadow-[0_0_15px_#10B981]" 
                    />
                 </svg>
               )}
           </div>
 
-          {/* Footer Controls */}
-          <div className="w-full pb-safe">
+          <div className="w-full pb-safe pointer-events-auto">
             <div className="pt-20 pb-10 px-6 flex flex-col items-center justify-end h-48 bg-gradient-to-t from-black via-black/40 to-transparent">
-                
                 {streamError ? (
                      <div className="text-rose-300 bg-rose-900/40 px-6 py-4 rounded-xl backdrop-blur-md border border-rose-500/30 mb-8 text-center">
                         <p>{streamError}</p>
@@ -543,25 +466,15 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
                      </div>
                 ) : !isScanning ? (
                     <div className="flex items-center gap-10 animate-in slide-in-from-bottom-8 duration-700">
-                        <button
-                            onClick={() => fileInputRef.current?.click()}
-                            className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center text-white hover:bg-white/20 transition-all active:scale-95 border border-white/10"
-                        >
-                            <ImageIcon size={20} />
-                        </button>
-
-                        <button
-                            onClick={() => setIsScanning(true)}
-                            className="w-20 h-20 bg-transparent rounded-full flex items-center justify-center border-4 border-white/30 hover:border-white transition-colors relative active:scale-95 group"
-                        >
+                        <button onClick={() => fileInputRef.current?.click()} className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center text-white hover:bg-white/20 transition-all active:scale-95 border border-white/10"><ImageIcon size={20} /></button>
+                        <button onClick={() => setIsScanning(true)} className="w-20 h-20 bg-transparent rounded-full flex items-center justify-center border-4 border-white/30 hover:border-white transition-colors relative active:scale-95 group">
                             <div className="w-16 h-16 bg-white rounded-full group-hover:scale-90 transition-transform duration-300" />
                         </button>
-                        
-                        <div className="w-12 h-12" /> {/* Spacer */}
+                        <div className="w-12 h-12" /> 
                     </div>
                 ) : (
                     <div className="text-center">
-                        <p className="text-white/80 text-xs font-medium tracking-widest uppercase animate-pulse mb-2">Analyzing Features...</p>
+                        <p className="text-white/80 text-xs font-medium tracking-widest uppercase animate-pulse mb-2">Scanning...</p>
                         <button onClick={() => setIsScanning(false)} className="px-6 py-2 rounded-full bg-white/10 backdrop-blur text-white text-xs font-bold hover:bg-white/20">Cancel</button>
                     </div>
                 )}
