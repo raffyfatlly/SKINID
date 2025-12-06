@@ -2,22 +2,13 @@ import { GoogleGenAI, Type, Chat } from "@google/genai";
 import { Product, SkinMetrics, UserProfile } from "../types";
 
 // Initialize the Google GenAI client
-// SECURITY: API Key must be provided via environment variable.
-// We use a safe check to prevent "process is not defined" crashes in Vite/Browser environments.
+// SECURITY: API Key is injected by Vite during build from process.env.API_KEY
 const getAI = () => {
-  let apiKey = '';
-  try {
-      // Check for standard Node/Webpack process.env
-      if (typeof process !== 'undefined' && process.env) {
-          apiKey = process.env.API_KEY || '';
-      }
-  } catch (e) {
-      // Ignore ReferenceError if process is not defined
-  }
+  // Direct access allows Vite's `define` plugin to replace this string with the actual key
+  const apiKey = process.env.API_KEY || '';
   
-  // Fallback for Vite environments if process.env didn't work
-  if (!apiKey && (import.meta as any).env) {
-      apiKey = (import.meta as any).env.VITE_API_KEY || '';
+  if (!apiKey) {
+      console.warn("API Key is missing in environment. Falling back to offline mode.");
   }
 
   return new GoogleGenAI({ apiKey: apiKey });
