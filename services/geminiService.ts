@@ -2,13 +2,15 @@ import { GoogleGenAI, Type, Chat } from "@google/genai";
 import { Product, SkinMetrics, UserProfile } from "../types";
 
 // Initialize the Google GenAI client
-// SECURITY: API Key is injected by Vite during build from process.env.API_KEY
+// SECURITY: Supports VITE_API_KEY (Standard) and API_KEY (Legacy/Injected)
 const getAI = () => {
-  // Direct access allows Vite's `define` plugin to replace this string with the actual key
-  const apiKey = process.env.API_KEY || '';
+  // 1. Try standard Vite env var (Best practice for Vercel)
+  // 2. Try process.env injection (Fallback)
+  const apiKey = import.meta.env.VITE_API_KEY || process.env.API_KEY || '';
   
-  if (!apiKey) {
-      console.warn("CRITICAL: API Key is missing. If you are on Vercel, go to Settings > Environment Variables and add 'API_KEY'. Then Redeploy.");
+  if (!apiKey || apiKey.includes("AIza") === false) {
+      console.warn("CRITICAL: API Key is missing or invalid.");
+      console.warn("Please add 'VITE_API_KEY' to your Vercel Environment Variables and Redeploy.");
   }
 
   return new GoogleGenAI({ apiKey: apiKey });
