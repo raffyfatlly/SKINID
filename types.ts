@@ -82,7 +82,8 @@ export interface Product {
   risks: IngredientRisk[];
   benefits: Benefit[];
   suitabilityScore: number; // 0-100
-  type: 'CLEANSER' | 'TONER' | 'SERUM' | 'MOISTURIZER' | 'SPF' | 'TREATMENT' | 'UNKNOWN';
+  type: 'CLEANSER' | 'TONER' | 'SERUM' | 'MOISTURIZER' | 'SPF' | 'TREATMENT' | 
+        'FOUNDATION' | 'CONCEALER' | 'POWDER' | 'PRIMER' | 'SETTING_SPRAY' | 'BLUSH' | 'BRONZER' | 'UNKNOWN';
 }
 
 export interface ShelfConflict {

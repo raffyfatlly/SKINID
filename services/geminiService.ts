@@ -37,9 +37,6 @@ const getAI = () => {
       apiKey = process.env.API_KEY || '';
   }
 
-  // If still no key, we might be in a dev environment without env vars set up correctly
-  // but we shouldn't crash.
-  
   return new GoogleGenAI({ apiKey: apiKey || 'dummy_key_to_prevent_crash' });
 };
 
@@ -150,7 +147,7 @@ export const analyzeFaceSkin = async (imageBase64: string): Promise<SkinMetrics>
 
 export const analyzeProductImage = async (imageBase64: string, userMetrics?: SkinMetrics): Promise<Product> => {
     return runWithRetry(async (ai) => {
-        let promptText = "Extract product name, brand, type (CLEANSER, TONER, SERUM, MOISTURIZER, SPF, TREATMENT), and ingredients. Analyze suitability (0-100). Return JSON.";
+        let promptText = "Extract product name, brand, type (CLEANSER, TONER, SERUM, MOISTURIZER, SPF, TREATMENT, FOUNDATION, CONCEALER, POWDER, PRIMER, SETTING_SPRAY, BLUSH, BRONZER), and ingredients. Analyze suitability (0-100). Return JSON.";
         
         if (userMetrics) {
             promptText = `
@@ -160,8 +157,9 @@ export const analyzeProductImage = async (imageBase64: string, userMetrics?: Ski
             - Sensitivity/Redness: ${userMetrics.redness} (Lower is sensitive)
             - Aging Signs: ${userMetrics.wrinkleFine} (Lower is more wrinkles)
             
-            1. Extract Name, Brand, Type (CLEANSER, TONER, SERUM, MOISTURIZER, SPF, TREATMENT), and Ingredients.
+            1. Extract Name, Brand, Type (CLEANSER, TONER, SERUM, MOISTURIZER, SPF, TREATMENT, FOUNDATION, CONCEALER, POWDER, PRIMER, SETTING_SPRAY, BLUSH, BRONZER), and Ingredients.
             2. Calculate a 'suitabilityScore' (0-100) specifically for THIS user based on ingredients vs their profile.
+               - For COSMETICS (Foundation, etc): Check for comedogenic ingredients (pore clogging) if acne score is low. Check for irritants if sensitivity is high.
             3. List specific Risks and Benefits for THIS user.
             Return JSON.
             `;
@@ -216,12 +214,14 @@ export const analyzeProductImage = async (imageBase64: string, userMetrics?: Ski
         const data = JSON.parse(response.text || "{}");
         const rawScore = data.suitabilityScore;
         const finalScore = (typeof rawScore === 'number' && !isNaN(rawScore)) ? rawScore : 70;
+        
+        const validTypes = ['CLEANSER','TONER','SERUM','MOISTURIZER','SPF','TREATMENT','FOUNDATION','CONCEALER','POWDER','PRIMER','SETTING_SPRAY','BLUSH','BRONZER'];
 
         return {
             id: Math.random().toString(36).substr(2, 9),
             name: data.name || "Unknown Product",
             brand: data.brand || "Unknown Brand",
-            type: (['CLEANSER','TONER','SERUM','MOISTURIZER','SPF','TREATMENT'].includes(data.type) ? data.type : 'UNKNOWN') as any,
+            type: (validTypes.includes(data.type) ? data.type : 'UNKNOWN') as any,
             ingredients: data.ingredients || [],
             risks: data.risks || [],
             benefits: data.benefits || [],
@@ -247,7 +247,16 @@ export const createDermatologistSession = (
     METRICS: Overall: ${userProfile.biometrics.overallScore}, Acne: ${userProfile.biometrics.acneActive}, Hydration: ${userProfile.biometrics.hydration}
     PROTOCOL: Prescribe: ${prescribedActives.join(', ')}. Avoid: ${avoid.join(', ')}.
     SHELF: ${shelfList || "Empty"}
-    ROLE: SkinOS AI Dermatologist. Concise, professional, empathetic. Short answers.
+    
+    TRENDING TREATMENTS (2025 Context):
+    - Polynucleotides (Salmon sperm DNA) for under-eye brightening.
+    - Exosomes for post-procedure healing.
+    - Sofwave (Ultrasound) for lifting without downtime.
+    - Moxie Laser for "pre-juvenation".
+    - Bio-remodeling injectables (Profhilo).
+    
+    ROLE: SkinOS AI Dermatologist. Concise, professional, empathetic. Short answers. 
+    If asking about clinical treatments, mention trending options if relevant to their biometrics.
     `;
 
     const history = previousHistory.map(h => ({
@@ -328,15 +337,24 @@ export const auditProduct = (product: Product, userProfile: UserProfile) => {
     const metrics = userProfile.biometrics;
     const warnings: { reason: string; severity: 'HIGH' | 'MEDIUM' }[] = [];
     const ing = product.ingredients.map(i => i.toLowerCase()).join(' ');
+    const isMakeup = ['FOUNDATION', 'CONCEALER', 'POWDER', 'PRIMER', 'BLUSH', 'BRONZER'].includes(product.type);
     
     // Sensitivity Check
     if (metrics.redness < 60) {
         if (ing.includes('retinol') || ing.includes('glycolic')) warnings.push({ reason: "Potentially too harsh for sensitive skin.", severity: 'HIGH' });
         if (ing.includes('fragrance') || ing.includes('parfum')) warnings.push({ reason: "Contains fragrance which may irritate.", severity: 'MEDIUM' });
+        if (isMakeup && (ing.includes('bismuth oxychloride') || ing.includes('alcohol denat'))) {
+             warnings.push({ reason: "Contains common makeup irritants for sensitive skin.", severity: 'MEDIUM' });
+        }
     }
     // Acne Check
-    if (metrics.acneActive < 60 && (ing.includes('coconut oil') || ing.includes('shea butter'))) {
-        warnings.push({ reason: "Potential pore-clogging ingredients.", severity: 'MEDIUM' });
+    if (metrics.acneActive < 60) {
+        if (ing.includes('coconut oil') || ing.includes('shea butter') || ing.includes('isopropyl myristate') || ing.includes('ethylhexyl palmitate')) {
+             warnings.push({ reason: "Potential pore-clogging ingredients detected.", severity: 'MEDIUM' });
+        }
+        if (isMakeup && (ing.includes('algae extract') || ing.includes('acetylated lanolin'))) {
+             warnings.push({ reason: "High comedogenic risk in this cosmetic.", severity: 'HIGH' });
+        }
     }
 
     let adjustedScore = product.suitabilityScore;
@@ -366,7 +384,8 @@ export const analyzeShelfHealth = (products: Product[], userProfile: UserProfile
             treatment: 0
         },
         grade: 'C' as 'S' | 'A' | 'B' | 'C' | 'D',
-        criticalInsight: ""
+        criticalInsight: "",
+        hasMakeup: false
     };
 
     if (products.length === 0) return { score: 0, analysis: { ...analysis, grade: 'D', criticalInsight: "Shelf is empty." } };
@@ -402,18 +421,25 @@ export const analyzeShelfHealth = (products: Product[], userProfile: UserProfile
     if (textAllIng.includes('benzoyl') && textAllIng.includes('retinol')) {
         analysis.conflicts.push("Benzoyl Peroxide + Retinol (May deactivate each other)");
     }
-    if (textAllIng.includes('copper peptide') && textAllIng.includes('ascorbic')) {
-        analysis.conflicts.push("Copper Peptides + Vitamin C (Can destabilize)");
-    }
     
-    if (textAllIng.includes('vitamin c') && (textAllIng.includes('zinc oxide') || textAllIng.includes('titanium') || textAllIng.includes('spf'))) {
-        analysis.synergies.push("Vitamin C + SPF (Boosts sun protection)");
-    }
-    if (textAllIng.includes('retinol') && (textAllIng.includes('ceramide') || textAllIng.includes('hyaluronic'))) {
-        analysis.synergies.push("Retinol + Barrier Repair (Reduces side effects)");
-    }
-    if (textAllIng.includes('salicylic') && textAllIng.includes('niacinamide')) {
-        analysis.synergies.push("BHA + Niacinamide (Pore minimizing duo)");
+    // Check if user has makeup
+    const makeupItems = products.filter(p => ['FOUNDATION', 'CONCEALER', 'POWDER', 'PRIMER', 'BLUSH', 'BRONZER'].includes(p.type));
+    const cleanserCount = products.filter(p => p.type === 'CLEANSER').length;
+    
+    if (makeupItems.length > 0) {
+        analysis.hasMakeup = true;
+        // Check for double cleanse necessity
+        if (cleanserCount < 2 && !products.some(p => p.name.toLowerCase().includes('oil') || p.name.toLowerCase().includes('balm') || p.name.toLowerCase().includes('micellar'))) {
+            analysis.missing.push("Double Cleanse (Oil/Balm) to remove makeup");
+        }
+        
+        // Check for SPF reliance warning
+        const makeupWithSPF = makeupItems.some(p => p.ingredients.some(i => i.toLowerCase().includes('titanium') || i.toLowerCase().includes('zinc') || i.toLowerCase().includes('octinoxate')));
+        const hasDedicatedSPF = products.some(p => p.type === 'SPF');
+        
+        if (makeupWithSPF && !hasDedicatedSPF) {
+            analysis.riskyProducts.push({ name: "Makeup SPF Only", reason: "SPF in makeup is insufficient for full protection." });
+        }
     }
 
     const types = products.map(p => p.type);
@@ -440,7 +466,7 @@ export const analyzeShelfHealth = (products: Product[], userProfile: UserProfile
     else if (analysis.conflicts.length > 0) {
         analysis.criticalInsight = "Chemical conflicts detected. Separate actives to AM/PM.";
     } else if (analysis.missing.length > 0) {
-        analysis.criticalInsight = `Incomplete routine. Missing core ${analysis.missing[0].toLowerCase()}.`;
+        analysis.criticalInsight = `Incomplete routine. Missing ${analysis.missing[0]}.`;
     } else {
         analysis.criticalInsight = "Solid foundation, consider targeting specific concerns.";
     }
@@ -465,6 +491,16 @@ export const analyzeProductContext = (product: Product, shelf: Product[]) => {
 
     if (pIng.includes('retinol') && shelfIng.includes('retinol')) conflicts.push("Redundant Retinol");
     if (pIng.includes('exfoliant') && shelfIng.includes('retinol')) conflicts.push("Exfoliant + Retinol Caution");
+    
+    // Primer/Foundation compatibility
+    if (product.type === 'FOUNDATION') {
+        const primers = shelf.filter(p => p.type === 'PRIMER');
+        if (primers.length > 0) {
+             const primerSilicone = primers.some(p => p.ingredients.join(' ').toLowerCase().includes('dimethicone'));
+             const foundationWater = !pIng.includes('dimethicone') && pIng.includes('water');
+             if (primerSilicone && foundationWater) conflicts.push("Silicone Primer + Water Foundation (May pill)");
+        }
+    }
 
     return { conflicts, typeCount };
 };
@@ -536,4 +572,119 @@ export const getBuyingDecision = (product: Product, shelf: Product[], user: User
     }
 
     return { verdict, audit, shelfConflicts, existingSameType, comparison };
+};
+
+// --- CLINICAL TREATMENTS ---
+
+export interface ClinicalTreatment {
+    name: string;
+    type: string;
+    benefit: string;
+    downtime: string;
+    matchScore: number;
+}
+
+export const getClinicalTreatmentSuggestions = (userProfile: UserProfile): ClinicalTreatment[] => {
+    const { biometrics } = userProfile;
+    const treatments: ClinicalTreatment[] = [];
+
+    // CRITICAL PRIORITY: Severe Dehydration / Barrier Damage
+    if (biometrics.hydration < 55 || biometrics.redness < 55) {
+        treatments.push({
+            name: "Skin Barrier Repair Facial",
+            type: "RECOVERY",
+            benefit: "Intensive lipid restoration and hydration infusion.",
+            downtime: "None",
+            matchScore: 99 // Top priority
+        });
+        treatments.push({
+            name: "Mesotherapy (Hyaluronic)",
+            type: "INJECTABLE",
+            benefit: "Direct delivery of hydration to deep skin layers.",
+            downtime: "Low (1-2 days)",
+            matchScore: 98
+        });
+    }
+
+    // HIGH PRIORITY: Active Acne (Score < 60)
+    if (biometrics.acneActive < 60) {
+        const severity = 60 - biometrics.acneActive;
+        treatments.push({
+            name: "Chemical Peel (Salicylic)",
+            type: "TREATMENT",
+            benefit: "Deep pore exfoliation to clear active congestion.",
+            downtime: "Moderate (Peeling)",
+            matchScore: 95 + (severity * 0.1) // 95-97 range
+        });
+        treatments.push({
+            name: "Blue LED Therapy",
+            type: "MAINTENANCE",
+            benefit: "Non-invasive bacteria elimination.",
+            downtime: "None",
+            matchScore: 90
+        });
+    }
+
+    // MODERATE PRIORITY: Pigmentation / Scarring (Score < 70)
+    if (biometrics.pigmentation < 70 || biometrics.acneScars < 70) {
+        treatments.push({
+            name: "IPL Photofacial",
+            type: "CORRECTION",
+            benefit: "Targets sun damage and vascular redness.",
+            downtime: "Low (Redness)",
+            matchScore: 92
+        });
+        treatments.push({
+            name: "Microneedling",
+            type: "RESTRUCTURING",
+            benefit: "Induces collagen to smooth texture and scars.",
+            downtime: "Moderate (3-4 days)",
+            matchScore: 88
+        });
+    }
+
+    // MODERATE PRIORITY: Aging / Sagging (Score < 70)
+    if (biometrics.sagging < 70 || biometrics.wrinkleDeep < 70) {
+        treatments.push({
+            name: "Radiofrequency Lifting",
+            type: "LIFTING",
+            benefit: "Tightens loose skin via deep heat stimulation.",
+            downtime: "None",
+            matchScore: 94
+        });
+         treatments.push({
+            name: "Bio-Remodeling (Profhilo)",
+            type: "INJECTABLE",
+            benefit: "Stimulates elastin for overall firmness.",
+            downtime: "Low (1 day)",
+            matchScore: 91
+        });
+    }
+
+    // ENHANCEMENT: General Texture / Glow (Fallback or Goal based)
+    // Only suggest if not dealing with severe acne/barrier issues
+    if (treatments.length < 2 && (biometrics.texture < 80 || biometrics.hydration >= 55)) {
+        treatments.push({
+            name: "HydraFacial",
+            type: "FACIAL",
+            benefit: "Deep clean and glow enhancement.",
+            downtime: "None",
+            matchScore: 85
+        });
+    }
+    
+    // ENHANCEMENT: Goal-specific
+    const goals = userProfile.preferences?.goals || [];
+    if (goals.includes('Look Younger & Firm') && treatments.length < 2) {
+         treatments.push({
+            name: "Laser Genesis",
+            type: "ENHANCEMENT",
+            benefit: "Collagen building for fine line prevention.",
+            downtime: "None",
+            matchScore: 80
+        });
+    }
+
+    // Sort by match score and return top 2
+    return treatments.sort((a,b) => b.matchScore - a.matchScore).slice(0, 2);
 };

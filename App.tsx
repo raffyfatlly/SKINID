@@ -51,6 +51,10 @@ const App: React.FC = () => {
   const [lastScannedProduct, setLastScannedProduct] = useState<Product | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   
+  // AI Chat State
+  const [isAiChatOpen, setIsAiChatOpen] = useState(false);
+  const [aiTriggerQuery, setAiTriggerQuery] = useState<string | null>(null);
+  
   // New Guidance State
   const [guideStep, setGuideStep] = useState<'ANALYSIS' | 'SCAN' | 'SHELF' | null>(null);
   const [showSaveProfileModal, setShowSaveProfileModal] = useState(false);
@@ -298,7 +302,11 @@ const App: React.FC = () => {
                     onRescan={() => {
                         setTempUserData({ name: user.name, age: user.age, skinType: user.skinType });
                         setView(AppView.FACE_SCANNER);
-                    }} 
+                    }}
+                    onConsultAI={(query) => {
+                        setAiTriggerQuery(query);
+                        setIsAiChatOpen(true);
+                    }}
                 />
              </div>
           </div>
@@ -473,7 +481,14 @@ const App: React.FC = () => {
       
       {/* AI ASSISTANT (Accessible from anywhere) */}
       {user && view !== AppView.ONBOARDING && view !== AppView.FACE_SCANNER && view !== AppView.PRODUCT_SCANNER && (
-         <AIAssistant user={user} shelf={shelf} />
+         <AIAssistant 
+            user={user} 
+            shelf={shelf} 
+            isOpen={isAiChatOpen} 
+            onOpen={() => setIsAiChatOpen(true)}
+            onClose={() => setIsAiChatOpen(false)}
+            triggerQuery={aiTriggerQuery}
+         />
       )}
 
       {/* FLOATING DOCK NAVIGATION */}

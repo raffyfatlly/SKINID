@@ -8,6 +8,10 @@ import { Chat, GenerateContentResponse } from "@google/genai";
 interface AIAssistantProps {
   user: UserProfile;
   shelf: Product[];
+  isOpen: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+  triggerQuery?: string | null;
 }
 
 interface Message {
@@ -17,17 +21,12 @@ interface Message {
 
 // Format Helper Component
 const MessageContent: React.FC<{ text: string }> = ({ text }) => {
-    // 1. Split into lines
     const lines = text.split('\n');
-    
     return (
         <div className="space-y-1">
             {lines.map((line, i) => {
-                // List Items
                 const isListItem = line.trim().startsWith('* ') || line.trim().startsWith('- ');
                 const cleanLine = isListItem ? line.trim().substring(2) : line;
-
-                // Bold Formatting: **text**
                 const parts = cleanLine.split(/(\*\*.*?\*\*)/g);
 
                 const renderedLine = (
@@ -49,37 +48,41 @@ const MessageContent: React.FC<{ text: string }> = ({ text }) => {
                         </div>
                     )
                 }
-
-                // Empty line is a spacer
                 if (!line.trim()) return <div key={i} className="h-2" />
-
                 return <div key={i}>{renderedLine}</div>;
             })}
         </div>
     );
 }
 
-const AIAssistant: React.FC<AIAssistantProps> = ({ user, shelf }) => {
-  const [isOpen, setIsOpen] = useState(false);
+const AIAssistant: React.FC<AIAssistantProps> = ({ user, shelf, isOpen, onOpen, onClose, triggerQuery }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [session, setSession] = useState<Chat | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const processedTriggerRef = useRef<string | null>(null);
 
   // Touch Handling for Swipe
   const touchStartY = useRef<number | null>(null);
 
-  // Initialize Chat Session
   useEffect(() => {
       if (!session) {
           const newSession = createDermatologistSession(user, shelf);
           setSession(newSession);
           if (messages.length === 0) {
-             setMessages([{ role: 'model', text: `Analysis complete. I am ready to optimize your skincare strategy.` }]);
+             setMessages([{ role: 'model', text: `Analysis complete. I can help optimize your routine or suggest professional treatments.` }]);
           }
       }
   }, [user, shelf, session]); 
+
+  // Handle Trigger Query
+  useEffect(() => {
+      if (isOpen && triggerQuery && triggerQuery !== processedTriggerRef.current && session) {
+          processedTriggerRef.current = triggerQuery;
+          handleSend(triggerQuery);
+      }
+  }, [isOpen, triggerQuery, session]);
 
   // Auto-scroll
   useEffect(() => {
@@ -88,18 +91,17 @@ const AIAssistant: React.FC<AIAssistantProps> = ({ user, shelf }) => {
       }
   }, [messages, isTyping, isOpen]);
 
-  const handleSend = async () => {
-      if (!inputText.trim() || !session) return;
+  const handleSend = async (textOverride?: string) => {
+      const msgText = textOverride || inputText;
+      if (!msgText.trim() || !session) return;
       
-      const userMsg = inputText;
-      setInputText('');
-      setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
+      if (!textOverride) setInputText('');
+      
+      setMessages(prev => [...prev, { role: 'user', text: msgText }]);
       setIsTyping(true);
 
-      if (!isOpen) setIsOpen(true);
-
       try {
-          const result = await session.sendMessageStream({ message: userMsg });
+          const result = await session.sendMessageStream({ message: msgText });
           let fullResponse = "";
           
           setMessages(prev => [...prev, { role: 'model', text: "" }]); 
@@ -118,7 +120,6 @@ const AIAssistant: React.FC<AIAssistantProps> = ({ user, shelf }) => {
       } catch (e) {
           console.error("Chat Error", e);
           const isQuota = isQuotaError(e);
-          
           setMessages(prev => [...prev, { 
               role: 'model', 
               text: isQuota 
@@ -138,6 +139,7 @@ const AIAssistant: React.FC<AIAssistantProps> = ({ user, shelf }) => {
       setSession(newSession);
   };
 
+  // --- SWIPE LOGIC FOR TOP SHEET ---
   const handleTouchStart = (e: React.TouchEvent) => {
       touchStartY.current = e.touches[0].clientY;
   };
@@ -147,14 +149,15 @@ const AIAssistant: React.FC<AIAssistantProps> = ({ user, shelf }) => {
       const touchEndY = e.changedTouches[0].clientY;
       const diff = touchEndY - touchStartY.current; // Positive = Down, Negative = Up
 
-      // Swipe Down (Positive diff) -> Open
-      if (diff > 40 && !isOpen) {
-          setIsOpen(true);
+      // 1. If Open: Swipe UP (Negative) to Close
+      if (isOpen && diff < -40) {
+          onClose();
       }
-      // Swipe Up (Negative diff) -> Close
-      else if (diff < -40 && isOpen) {
-          setIsOpen(false);
+      // 2. If Closed: Swipe DOWN (Positive) to Open
+      else if (!isOpen && diff > 40) {
+          onOpen();
       }
+      
       touchStartY.current = null;
   };
 
@@ -163,7 +166,7 @@ const AIAssistant: React.FC<AIAssistantProps> = ({ user, shelf }) => {
       {/* BACKDROP */}
       <div 
         className={`fixed inset-0 bg-black/30 backdrop-blur-sm z-40 transition-opacity duration-500 ${isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
-        onClick={() => setIsOpen(false)}
+        onClick={onClose}
       />
 
       {/* TOP SHEET WRAPPER */}
@@ -171,10 +174,14 @@ const AIAssistant: React.FC<AIAssistantProps> = ({ user, shelf }) => {
         className={`fixed top-0 left-0 right-0 z-50 transition-transform duration-500 cubic-bezier(0.19, 1, 0.22, 1) flex flex-col items-center pointer-events-none ${isOpen ? 'translate-y-0' : '-translate-y-full'}`}
       >
           {/* MAIN SHEET CONTENT */}
-          <div className="w-full h-[80vh] bg-white rounded-b-[2.5rem] shadow-2xl flex flex-col overflow-hidden relative border-b border-zinc-100 pointer-events-auto">
+          <div className="w-full h-[85vh] bg-white rounded-b-[2.5rem] shadow-2xl flex flex-col overflow-hidden relative border-b border-zinc-100 pointer-events-auto">
               
               {/* Header inside Sheet */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-50 bg-white shrink-0 pt-12 pb-4">
+              <div 
+                  className="flex items-center justify-between px-6 py-4 border-b border-zinc-50 bg-white shrink-0 pt-12 pb-4 cursor-grab active:cursor-grabbing"
+                  onTouchStart={handleTouchStart}
+                  onTouchEnd={handleTouchEnd}
+              >
                   <div className="flex items-center gap-2">
                        <div className="w-8 h-8 rounded-full bg-teal-50 flex items-center justify-center text-teal-600">
                            <Sparkles size={16} /> 
@@ -239,7 +246,7 @@ const AIAssistant: React.FC<AIAssistantProps> = ({ user, shelf }) => {
                           className="w-full bg-zinc-50 border border-zinc-200 rounded-full pl-6 pr-14 py-4 text-sm font-medium text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500/20 transition-all shadow-inner"
                       />
                       <button 
-                        onClick={handleSend}
+                        onClick={() => handleSend()}
                         disabled={!inputText.trim() || isTyping}
                         className="absolute right-2 p-2.5 bg-zinc-900 text-white rounded-full hover:bg-zinc-800 disabled:opacity-50 disabled:scale-95 transition-all shadow-md active:scale-90"
                       >
@@ -249,22 +256,19 @@ const AIAssistant: React.FC<AIAssistantProps> = ({ user, shelf }) => {
               </div>
           </div>
 
-          {/* PULL TAB / TONGUE (Hanging below) */}
+          {/* PULL TAB / TONGUE (Always Visible at bottom of sheet) */}
           <div 
-             className="absolute bottom-0 translate-y-[90%] flex flex-col items-center pointer-events-auto cursor-pointer group z-50 touch-none"
-             onClick={() => setIsOpen(!isOpen)}
+             className="absolute bottom-0 translate-y-[90%] flex flex-col items-center pointer-events-auto cursor-grab active:cursor-grabbing group z-50 touch-none"
+             onClick={isOpen ? onClose : onOpen} 
              onTouchStart={handleTouchStart}
              onTouchEnd={handleTouchEnd}
           >
-              {/* The Visual Tab - WIDER & SHORTER */}
-              <div className="w-40 h-8 bg-white rounded-b-2xl shadow-[0_10px_25px_-5px_rgba(0,0,0,0.1)] border-b border-x border-zinc-100 flex items-center justify-center relative z-10 hover:h-10 transition-all duration-300">
+              <div className={`w-20 h-7 bg-white/95 backdrop-blur-md rounded-b-xl shadow-lg border-b border-x border-zinc-100 flex items-center justify-center relative z-10 transition-all duration-300 ${isOpen ? 'hover:h-9' : 'hover:h-8'} ${!isOpen ? 'shadow-teal-500/10 border-b-teal-50' : ''}`}>
                   {isOpen ? (
-                      <ChevronUp size={20} className="text-zinc-400" />
+                      <ChevronUp size={16} className="text-zinc-400 group-hover:text-zinc-600 transition-colors" />
                   ) : (
-                      <>
-                        <div className="w-12 h-1 rounded-full bg-zinc-300 group-hover:bg-teal-500 transition-colors" />
-                        <Sparkles size={12} className="text-teal-500 absolute top-2 right-4 animate-pulse opacity-0 group-hover:opacity-100 transition-opacity" />
-                      </>
+                      /* Elegant Handle Bar */
+                      <div className="w-8 h-1 bg-zinc-300 rounded-full group-hover:bg-teal-500 transition-colors duration-300" />
                   )}
               </div>
           </div>

@@ -1,6 +1,8 @@
+
+
 import React, { useState, useMemo } from 'react';
 import { Product, UserProfile, SkinMetrics } from '../types';
-import { Plus, Droplet, Sun, Zap, Sparkles, AlertTriangle, Layers, AlertOctagon, Target, ShieldCheck, X, FlaskConical, Clock, Ban, ArrowRightLeft, CheckCircle2, Microscope, Dna } from 'lucide-react';
+import { Plus, Droplet, Sun, Zap, Sparkles, AlertTriangle, Layers, AlertOctagon, Target, ShieldCheck, X, FlaskConical, Clock, Ban, ArrowRightLeft, CheckCircle2, Microscope, Dna, Palette, Brush, SprayCan, Stamp } from 'lucide-react';
 import { auditProduct, analyzeShelfHealth, analyzeProductContext } from '../services/geminiService';
 
 interface SmartShelfProps {
@@ -12,8 +14,19 @@ interface SmartShelfProps {
 
 const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onScanNew, userProfile }) => {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [activeTab, setActiveTab] = useState<'ROUTINE' | 'VANITY'>('ROUTINE');
 
   const shelfIQ = useMemo(() => analyzeShelfHealth(products, userProfile), [products, userProfile]);
+
+  const makeupTypes = ['FOUNDATION', 'CONCEALER', 'POWDER', 'PRIMER', 'SETTING_SPRAY', 'BLUSH', 'BRONZER'];
+
+  const filteredProducts = useMemo(() => {
+      if (activeTab === 'ROUTINE') {
+          return products.filter(p => !makeupTypes.includes(p.type));
+      } else {
+          return products.filter(p => makeupTypes.includes(p.type));
+      }
+  }, [products, activeTab]);
 
   const getProductColor = (type: string) => {
       switch(type) {
@@ -21,6 +34,9 @@ const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onSc
           case 'SPF': return 'bg-amber-50 text-amber-600';
           case 'SERUM': return 'bg-teal-50 text-teal-600';
           case 'MOISTURIZER': return 'bg-rose-50 text-rose-600';
+          case 'FOUNDATION': return 'bg-orange-50 text-orange-600';
+          case 'POWDER': return 'bg-stone-50 text-stone-600';
+          case 'PRIMER': return 'bg-purple-50 text-purple-600';
           default: return 'bg-zinc-50 text-zinc-600';
       }
   }
@@ -30,6 +46,11 @@ const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onSc
           case 'CLEANSER': return <Droplet size={20} />;
           case 'SPF': return <Sun size={20} />;
           case 'SERUM': return <Zap size={20} />;
+          case 'FOUNDATION': return <Palette size={20} />;
+          case 'POWDER': return <Stamp size={20} />;
+          case 'PRIMER': return <Layers size={20} />;
+          case 'SETTING_SPRAY': return <SprayCan size={20} />;
+          case 'BLUSH': return <Brush size={20} />;
           default: return <Sparkles size={20} />;
       }
   }
@@ -72,9 +93,9 @@ const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onSc
                            <Ban size={18} />
                        </div>
                        <div className="flex-1">
-                           <h4 className="text-xs font-black uppercase tracking-wide text-rose-800 mb-1">Stop Using {item.name}</h4>
+                           <h4 className="text-xs font-black uppercase tracking-wide text-rose-800 mb-1">Issue: {item.name}</h4>
                            <p className="text-xs text-rose-700 font-medium leading-relaxed mb-2">
-                               {item.reason}. This formula is potentially harmful for your skin profile.
+                               {item.reason}
                            </p>
                            <button 
                                 onClick={() => {
@@ -200,9 +221,8 @@ const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onSc
               </button>
           </div>
 
-          {/* MAIN SCORE CARD - REDESIGNED */}
+          {/* MAIN SCORE CARD */}
           <div className="modern-card rounded-[2.5rem] p-8 relative overflow-hidden">
-             {/* Dynamic Background Grade */}
              <div className="absolute top-0 right-0 p-8 opacity-10">
                  <span className={`text-9xl font-black ${getGradeColor(shelfIQ.analysis.grade).split(' ')[0]}`}>
                      {shelfIQ.analysis.grade}
@@ -242,16 +262,31 @@ const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onSc
           {renderDashboard()}
        </div>
 
+       {/* TABS FOR ROUTINE VS VANITY */}
+       <div className="px-6 mt-10">
+           <div className="flex bg-zinc-100/50 p-1 rounded-2xl mb-6 border border-zinc-100">
+               <button 
+                  onClick={() => setActiveTab('ROUTINE')}
+                  className={`flex-1 py-3 rounded-xl text-xs font-bold uppercase tracking-wide transition-all ${activeTab === 'ROUTINE' ? 'bg-white shadow-sm text-teal-700' : 'text-zinc-400 hover:text-zinc-600'}`}
+               >
+                  Skincare
+               </button>
+               <button 
+                  onClick={() => setActiveTab('VANITY')}
+                  className={`flex-1 py-3 rounded-xl text-xs font-bold uppercase tracking-wide transition-all ${activeTab === 'VANITY' ? 'bg-white shadow-sm text-teal-700' : 'text-zinc-400 hover:text-zinc-600'}`}
+               >
+                  Vanity
+               </button>
+           </div>
+       </div>
+
        {/* PRODUCT LIST */}
-       <div className="px-6 grid grid-cols-2 gap-4 mt-10">
-           {products.map((p) => {
+       <div className="px-6 grid grid-cols-2 gap-4">
+           {filteredProducts.map((p) => {
                const audit = auditProduct(p, userProfile);
                const warning = audit.warnings.length > 0;
                const score = Number(audit.adjustedScore);
-               // Explicit low score check
                const isLowScore = !warning && (score < 70 || isNaN(score));
-
-               // Check if actionable
                const isRisky = shelfIQ.analysis.riskyProducts.some(r => r.name === p.name);
                const isConflict = shelfIQ.analysis.conflicts.some(c => c.toLowerCase().includes(p.ingredients[0]?.toLowerCase()) || p.ingredients.some(i => c.toLowerCase().includes(i.toLowerCase())));
 
@@ -280,7 +315,7 @@ const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onSc
                             {warning ? (
                                 <>
                                     <AlertTriangle size={12} className="mr-1.5" />
-                                    STOP USING
+                                    AVOID
                                 </>
                             ) : isConflict ? (
                                 <>
@@ -288,7 +323,7 @@ const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onSc
                                     SCHEDULE
                                 </>
                             ) : (
-                                `${score}% MATCH`
+                                `${score}% SAFE`
                             )}
                         </div>
                    </button>
@@ -302,6 +337,12 @@ const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onSc
                <span className="text-[10px] font-bold uppercase tracking-widest">Add Product</span>
            </button>
        </div>
+       
+       {activeTab === 'VANITY' && filteredProducts.length === 0 && (
+           <div className="px-6 mt-4 text-center">
+               <p className="text-zinc-400 text-sm font-medium">No cosmetics found. Scan foundation, powder, or primer to check compatibility.</p>
+           </div>
+       )}
 
        {/* PRODUCT DETAIL MODAL */}
        {selectedProduct && (
@@ -324,7 +365,6 @@ const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onSc
                              const audit = auditProduct(selectedProduct, userProfile);
                              const warning = audit.warnings.length > 0;
                              const score = Number(audit.adjustedScore);
-                             // STRICT LOGIC: If score is < 70, it MUST be Low Compatibility unless it has a critical warning.
                              const isLowScore = !warning && (score < 70 || isNaN(score));
                              
                              const cardStyle = warning ? 'bg-rose-50 border-rose-100' : 
@@ -368,20 +408,21 @@ const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onSc
                              const context = analyzeProductContext(selectedProduct, otherProducts);
                              const isRisky = shelfIQ.analysis.riskyProducts.some(r => r.name === selectedProduct.name);
 
-                             if (isRisky) {
-                                return (
-                                    <div className="p-6 rounded-[1.5rem] bg-rose-500 text-white shadow-xl shadow-rose-500/20">
-                                        <h4 className="text-xs font-black uppercase tracking-widest mb-3 flex items-center gap-2">
-                                            <Ban size={14} /> Recommendation
-                                        </h4>
-                                        <p className="text-sm font-bold leading-relaxed mb-4">
-                                            Discontinue use immediately. Re-evaluate skin health after 2 weeks.
-                                        </p>
-                                        <button className="w-full py-3 bg-white text-rose-600 rounded-xl font-bold text-xs uppercase tracking-wider">
-                                            Find Safe Alternative
-                                        </button>
-                                    </div>
-                                )
+                             if (isRisky && !auditProduct(selectedProduct, userProfile).warnings.length) {
+                                // Fallback risk message if it was caught by shelf analysis but not individual audit (e.g. SPF warning)
+                                const shelfRisk = shelfIQ.analysis.riskyProducts.find(r => r.name === selectedProduct.name);
+                                if (shelfRisk) {
+                                    return (
+                                        <div className="p-6 rounded-[1.5rem] bg-rose-50 border border-rose-100">
+                                            <h4 className="text-xs font-bold text-rose-700 uppercase tracking-widest mb-3 flex items-center gap-2">
+                                                <AlertTriangle size={14} /> Warning
+                                            </h4>
+                                            <p className="text-sm text-rose-800 font-medium leading-relaxed">
+                                                {shelfRisk.reason}
+                                            </p>
+                                        </div>
+                                    )
+                                }
                              }
                              
                              if (context.conflicts.length > 0) {
@@ -410,7 +451,7 @@ const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onSc
                                             <ArrowRightLeft size={14} /> Redundancy
                                         </h4>
                                         <p className="text-xs text-amber-800 font-medium leading-relaxed">
-                                            You have {context.typeCount} other {selectedProduct.type.toLowerCase()}{context.typeCount > 1 ? 's' : ''}. Pick your favorite and store the rest to avoid product waste and expiration.
+                                            You have {context.typeCount} other {selectedProduct.type.toLowerCase()}{context.typeCount > 1 ? 's' : ''}.
                                         </p>
                                     </div>
                                 )
