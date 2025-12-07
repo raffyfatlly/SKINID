@@ -234,7 +234,7 @@ const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onSc
                      <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1">Routine Grade</h3>
                      <div className="flex items-baseline gap-2">
                          <span className={`text-5xl font-black ${getGradeColor(shelfIQ.analysis.grade).split(' ')[0]}`}>
-                             Tier {shelfIQ.analysis.grade}
+                             {shelfIQ.analysis.grade}
                          </span>
                      </div>
                      <p className="text-xs font-medium text-zinc-500 mt-2 max-w-[180px] leading-relaxed">

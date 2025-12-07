@@ -71,15 +71,23 @@ async function runWithRetry<T>(
 
 // --- FALLBACK DATA (Offline Mode) ---
 
-const getFallbackSkinMetrics = (): SkinMetrics => ({
-    overallScore: 78,
-    acneActive: 85, acneScars: 80, poreSize: 72, blackheads: 75,
-    wrinkleFine: 88, wrinkleDeep: 95, sagging: 90, pigmentation: 70,
-    redness: 65, texture: 75, hydration: 60, oiliness: 55, darkCircles: 68,
-    analysisSummary: "Offline Analysis: Skin appears generally healthy with mild sensitivity markers.",
-    observations: { redness: "Mild redness detected.", hydration: "Skin appears slightly dehydrated." },
-    timestamp: Date.now(),
-});
+const getFallbackSkinMetrics = (localMetrics?: SkinMetrics): SkinMetrics => {
+    if (localMetrics) return {
+        ...localMetrics,
+        analysisSummary: "Offline Analysis: Based on computer vision metrics only.",
+        observations: { redness: "Visible markers detected.", hydration: "Requires monitoring." }
+    };
+    
+    return {
+        overallScore: 78,
+        acneActive: 85, acneScars: 80, poreSize: 72, blackheads: 75,
+        wrinkleFine: 88, wrinkleDeep: 95, sagging: 90, pigmentation: 70,
+        redness: 65, texture: 75, hydration: 60, oiliness: 55, darkCircles: 68,
+        analysisSummary: "Offline Analysis: Skin appears generally healthy with mild sensitivity markers.",
+        observations: { redness: "Mild redness detected.", hydration: "Skin appears slightly dehydrated." },
+        timestamp: Date.now(),
+    }
+};
 
 const getFallbackProduct = (userMetrics?: SkinMetrics): Product => ({
     id: "fallback-" + Date.now(),
@@ -95,17 +103,47 @@ const getFallbackProduct = (userMetrics?: SkinMetrics): Product => ({
 
 // --- AI FUNCTIONS ---
 
-export const analyzeFaceSkin = async (imageBase64: string): Promise<SkinMetrics> => {
+/**
+ * Analyzes skin using a hybrid approach:
+ * 1. Takes Local Computer Vision metrics (deterministic).
+ * 2. Asks AI to validate or refine them (qualitative).
+ * 3. Blends scores using a weighted average for consistency.
+ */
+export const analyzeFaceSkin = async (imageBase64: string, localMetrics?: SkinMetrics): Promise<SkinMetrics> => {
     return runWithRetry(async (ai) => {
+        // Construct a context string with the local deterministic data
+        let promptContext = "Analyze this face for dermatological metrics (0-100). 100 is PERFECT health (no issues).";
+        if (localMetrics) {
+            promptContext += `
+            
+            PRELIMINARY COMPUTER VISION DATA (Use as baseline):
+            - Acne/Blemishes: ${localMetrics.acneActive}
+            - Redness/Sensitivity: ${localMetrics.redness}
+            - Wrinkles/Aging: ${localMetrics.wrinkleFine}
+            - Texture: ${localMetrics.texture}
+            
+            CRITICAL SCORING RULES:
+            1. DISTINGUISH PEELING VS ACNE: If you see peeling skin, flakes, or raw skin (dermatitis) but NO distinct pustules/cysts, your "Acne Score" must be HIGH (Good condition, e.g., 85+). Do NOT mark peeling as acne.
+            2. TEXTURE PENALTY: If you see peeling or roughness, the "Texture Score" must be LOW (Bad condition, e.g., < 50).
+            3. BARRIER HEALTH: If you see significant redness or peeling, the "Overall Score" MUST be penalized (e.g., < 65). Do not give a high Overall Score to damaged skin even if there are no wrinkles.
+            4. CONSISTENCY: Use the provided CV data as an anchor, but if the visual evidence clearly contradicts it (e.g. CV says Acne is 30 but it's actually peeling), OVERRIDE the CV score heavily.
+            
+            OUTPUT:
+            - Provide a professional clinical summary explaining the PRIMARY issue (e.g. "Barrier compromise with peeling").
+            - Ensure numeric scores strictly match your visual diagnosis.
+            `;
+        }
+
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: {
                 parts: [
                     { inlineData: { mimeType: "image/jpeg", data: imageBase64.split(',')[1] } },
-                    { text: "Analyze this face for dermatological metrics (0-100). 100 is perfect health. Return JSON." }
+                    { text: promptContext }
                 ]
             },
             config: {
+                temperature: 0, // CRITICAL: Force deterministic output
                 responseMimeType: "application/json",
                 responseSchema: {
                     type: Type.OBJECT,
@@ -139,10 +177,37 @@ export const analyzeFaceSkin = async (imageBase64: string): Promise<SkinMetrics>
             }
         });
         
-        const data = JSON.parse(response.text || "{}");
-        if (!data.overallScore) throw new Error("Invalid AI Response");
-        return { ...data, timestamp: Date.now() };
-    }, getFallbackSkinMetrics());
+        const aiData = JSON.parse(response.text || "{}");
+        if (!aiData.overallScore) throw new Error("Invalid AI Response");
+
+        // HYBRID BLENDING LOGIC:
+        // We favor AI judgment (80%) because it understands context (Peeling vs Acne) better than CV.
+        // CV (20%) acts as a deterministic stabilizer to prevent wild hallucinations between frames.
+        const blend = (local: number, ai: number) => Math.round((local * 0.20) + (ai * 0.80));
+        
+        const finalMetrics: SkinMetrics = localMetrics ? {
+            ...aiData,
+            overallScore: blend(localMetrics.overallScore, aiData.overallScore),
+            acneActive: blend(localMetrics.acneActive, aiData.acneActive),
+            acneScars: blend(localMetrics.acneScars, aiData.acneScars),
+            poreSize: blend(localMetrics.poreSize, aiData.poreSize),
+            blackheads: blend(localMetrics.blackheads, aiData.blackheads),
+            wrinkleFine: blend(localMetrics.wrinkleFine, aiData.wrinkleFine),
+            wrinkleDeep: blend(localMetrics.wrinkleDeep, aiData.wrinkleDeep),
+            sagging: blend(localMetrics.sagging, aiData.sagging),
+            pigmentation: blend(localMetrics.pigmentation, aiData.pigmentation),
+            redness: blend(localMetrics.redness, aiData.redness),
+            texture: blend(localMetrics.texture, aiData.texture),
+            hydration: blend(localMetrics.hydration, aiData.hydration),
+            oiliness: blend(localMetrics.oiliness, aiData.oiliness),
+            darkCircles: blend(localMetrics.darkCircles, aiData.darkCircles),
+            skinAge: aiData.skinAge || localMetrics.skinAge, // Prefer AI age if available
+            timestamp: Date.now()
+        } : { ...aiData, timestamp: Date.now() };
+
+        return finalMetrics;
+
+    }, getFallbackSkinMetrics(localMetrics));
 };
 
 export const analyzeProductImage = async (imageBase64: string, userMetrics?: SkinMetrics): Promise<Product> => {
@@ -174,6 +239,7 @@ export const analyzeProductImage = async (imageBase64: string, userMetrics?: Ski
                 ]
             },
             config: {
+                temperature: 0,
                 responseMimeType: "application/json",
                 responseSchema: {
                     type: Type.OBJECT,

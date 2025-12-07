@@ -3,7 +3,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { SkinMetrics, Product, UserProfile } from '../types';
 import { auditProduct, getClinicalTreatmentSuggestions } from '../services/geminiService';
-import { RefreshCw, Sparkles, Sun, Moon, Ban, CheckCircle2, AlertTriangle, Target, BrainCircuit, Stethoscope, Plus, Microscope, X, FlaskConical, Search, ArrowRight, Pipette, Droplet, Layers, Fingerprint, Info, AlertOctagon, GitBranch, ArrowUpRight, Syringe, Zap, Activity, MessageCircle } from 'lucide-react';
+import { RefreshCw, Sparkles, Sun, Moon, Ban, CheckCircle2, AlertTriangle, Target, BrainCircuit, Stethoscope, Plus, Microscope, X, FlaskConical, Search, ArrowRight, Pipette, Droplet, Layers, Fingerprint, Info, AlertOctagon, GitBranch, ArrowUpRight, Syringe, Zap, Activity, MessageCircle, ShieldAlert } from 'lucide-react';
 
 // --- SUB COMPONENTS ---
 
@@ -384,9 +384,12 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
     }
 
     rankedConcerns.sort((a, b) => a.score - b.score);
-    const topConcerns = rankedConcerns.slice(0, 3);
+    // Expand concern list for advanced complexity
+    const concernLimit = complexity === 'ADVANCED' ? 6 : 3;
+    const topConcerns = rankedConcerns.slice(0, concernLimit);
 
-    const ingredients: { name: string, action: string }[] = [];
+    const ingredients: { name: string, action: string, context?: string, isSafetySwap?: boolean }[] = [];
+    
     topConcerns.forEach(concern => {
         switch(concern.id) {
             case 'acneActive': ingredients.push({ name: 'Salicylic Acid', action: 'Unclogs pores & clears acne.' }, { name: 'Benzoyl Peroxide', action: 'Kills acne bacteria.' }); break;
@@ -405,7 +408,35 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
         }
     });
 
-    const uniqueIngredients = ingredients.filter((v,i,a)=>a.findIndex(t=>(t.name===v.name))===i).slice(0, 4);
+    const limit = complexity === 'ADVANCED' ? 8 : 4;
+    let uniqueIngredients = ingredients.filter((v,i,a)=>a.findIndex(t=>(t.name===v.name))===i).slice(0, limit);
+
+    // --- CLINICAL SAFETY LAYER ---
+    // If skin is compromised (Hydration < 45 or Redness < 50), we MUST swap harsh actives
+    // User Context: "I got glycolic acid when my hydration is 27" -> This logic fixes that.
+
+    const isDehydrated = metrics.hydration < 45;
+    const isSensitive = metrics.redness < 50;
+
+    uniqueIngredients = uniqueIngredients.map(ing => {
+        // Hydration Safety Swaps
+        if (isDehydrated) {
+            if (ing.name === 'Glycolic Acid') return { name: 'Lactic Acid', action: 'Hydrating exfoliation.', context: 'Swapped from Glycolic due to low hydration.', isSafetySwap: true };
+            if (ing.name === 'Salicylic Acid') return { name: 'Willow Bark', action: 'Natural, gentle pore clearing.', context: 'Swapped from BHA to prevent drying.', isSafetySwap: true };
+            if (ing.name === 'Retinol' || ing.name === 'Retinal') return { name: 'Bakuchiol', action: 'Plant-based alternative.', context: 'Swapped from Retinol to preserve moisture.', isSafetySwap: true };
+            if (ing.name === 'Benzoyl Peroxide') return { name: 'Sulfur', action: 'Gentle antibacterial.', context: 'Less drying than Benzoyl Peroxide.', isSafetySwap: true };
+            if (ing.name === 'Clay') return { name: 'Enzyme Mask', action: 'Gentle resurfacing.', context: 'Non-drying alternative to Clay.', isSafetySwap: true };
+        }
+        
+        // Sensitivity Safety Swaps
+        if (isSensitive) {
+            if (ing.name === 'Glycolic Acid' || ing.name === 'Lactic Acid') return { name: 'PHA', action: 'Exfoliation without irritation.', context: 'Acid swapped for sensitive skin safety.', isSafetySwap: true };
+            if (ing.name === 'Vitamin C') return { name: 'Magnesium Ascorbyl Phosphate', action: 'Stable, gentle brightening.', context: 'Non-stinging Vitamin C form.', isSafetySwap: true };
+            if (ing.name === 'Retinol') return { name: 'Peptides', action: 'Collagen support without irritation.', context: 'Retinol is too harsh for current sensitivity.', isSafetySwap: true };
+        }
+
+        return ing;
+    });
 
     const avoid: string[] = [];
     if (metrics.redness < 65) avoid.push('Fragrance', 'Alcohol Denat', 'Essential Oils');
@@ -413,7 +444,7 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
     if (metrics.acneActive < 65 || metrics.oiliness < 55) avoid.push('Coconut Oil', 'Shea Butter', 'Mineral Oil');
     if (avoid.length === 0) avoid.push('Harsh Physical Scrubs');
 
-    return { topConcerns, ingredients: uniqueIngredients, avoid };
+    return { topConcerns, ingredients: uniqueIngredients, avoid, hasSafetySwaps: uniqueIngredients.some(i => i.isSafetySwap) };
   }, [metrics, complexity, userProfile.preferences]);
 
   const routinePlan = useMemo(() => {
@@ -421,12 +452,21 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
     const usedIngredients = new Set<string>();
 
     const vehicleMap: Record<string, string[]> = {
-        'CLEANSER': ['Salicylic Acid', 'Benzoyl Peroxide', 'Glycolic Acid', 'Lactic Acid', 'BHA', 'AHA', 'Tea Tree', 'Oat'],
-        'TONER': ['Glycolic Acid', 'Salicylic Acid', 'Lactic Acid', 'BHA', 'AHA', 'Centella', 'Green Tea'],
-        'SERUM': ['Retinol', 'Retinal', 'Vitamin C', 'Niacinamide', 'Tranexamic Acid', 'Alpha Arbutin', 'Peptides', 'Copper Peptides', 'Azelaic Acid'],
-        'MOISTURIZER': ['Ceramides', 'Urea', 'Peptides', 'Centella', 'Panthenol', 'Squalane', 'Hyaluronic Acid'],
-        'SPF': ['Zinc Oxide', 'Titanium Dioxide', 'Vitamin C', 'Niacinamide'],
-        'TREATMENT': ['Benzoyl Peroxide', 'Salicylic Acid', 'Adapalene', 'Azelaic Acid', 'Retinol', 'Tretinoin', 'Sulfur']
+        'CLEANSER': ['Salicylic Acid', 'Benzoyl Peroxide', 'Glycolic Acid', 'Lactic Acid', 'BHA', 'AHA', 'Tea Tree', 'Oat', 'Centella', 'Willow Bark', 'Sulfur'],
+        'TONER': ['Glycolic Acid', 'Salicylic Acid', 'Lactic Acid', 'BHA', 'AHA', 'Centella', 'Green Tea', 'Hyaluronic Acid', 'PHA', 'Willow Bark'],
+        'SERUM': ['Retinol', 'Retinal', 'Vitamin C', 'Niacinamide', 'Tranexamic Acid', 'Alpha Arbutin', 'Peptides', 'Copper Peptides', 'Azelaic Acid', 'Hyaluronic Acid', 'Growth Factors', 'Bakuchiol', 'Magnesium Ascorbyl Phosphate'],
+        'MOISTURIZER': ['Ceramides', 'Urea', 'Peptides', 'Centella', 'Panthenol', 'Squalane', 'Hyaluronic Acid', 'Retinol', 'Niacinamide', 'Salicylic Acid', 'Vitamin C', 'Azelaic Acid', 'Bakuchiol'],
+        'SPF': ['Zinc Oxide', 'Titanium Dioxide', 'Vitamin C', 'Niacinamide', 'Ceramides'],
+        'TREATMENT': ['Benzoyl Peroxide', 'Salicylic Acid', 'Adapalene', 'Azelaic Acid', 'Retinol', 'Tretinoin', 'Sulfur', 'Willow Bark']
+    };
+
+    const supportiveIngredients: Record<string, string[]> = {
+        'CLEANSER': ['Glycerin', 'Prebiotics', 'Panthenol'],
+        'TONER': ['Hyaluronic Acid', 'Rose Water', 'Chamomile'],
+        'SERUM': ['Peptides', 'Ceramides', 'Vitamin E'],
+        'MOISTURIZER': ['Squalane', 'Shea Butter', 'Allantoin'],
+        'SPF': ['Antioxidants', 'Aloe Vera'],
+        'TREATMENT': ['Sulfur', 'Zinc']
     };
 
     const getFormulation = (step: string): string => {
@@ -464,77 +504,78 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
 
     const sortedActiveNeeds = [...prescription.ingredients]; 
 
-    const slotsToFill = [
-        { key: 'SERUM_PM', type: 'SERUM', time: 'PM' },
-        { key: 'CLEANSER_PM', type: 'CLEANSER', time: 'PM' },
-        { key: 'TREATMENT_PM', type: 'TREATMENT', time: 'PM' },
-        { key: 'SERUM_AM', type: 'SERUM', time: 'AM' },
-        { key: 'CLEANSER_AM', type: 'CLEANSER', time: 'AM' },
-        { key: 'TONER_AM', type: 'TONER', time: 'AM' },
-        { key: 'TONER_PM', type: 'TONER', time: 'PM' },
-        { key: 'MOISTURIZER_PM', type: 'MOISTURIZER', time: 'PM' },
-        { key: 'SPF_AM', type: 'SPF', time: 'AM' }
-    ];
+    // DYNAMIC SLOTS based on Complexity
+    let slotsToFill: { key: string, type: string, time: 'AM' | 'PM' }[] = [];
+
+    const isVeryOily = metrics.oiliness < 45;
+
+    if (complexity === 'BASIC') {
+        slotsToFill = [
+             { key: 'SERUM_AM', type: 'SERUM', time: 'AM' }, 
+             { key: 'SPF_AM', type: 'SPF', time: 'AM' },
+             { key: 'CLEANSER_PM', type: 'CLEANSER', time: 'PM' }, 
+             { key: 'CLEANSER_AM', type: 'CLEANSER', time: 'AM' }
+        ];
+
+        if (isVeryOily) {
+             slotsToFill.push({ key: 'SERUM_PM', type: 'SERUM', time: 'PM' });
+        } else {
+             slotsToFill.push({ key: 'MOISTURIZER_PM', type: 'MOISTURIZER', time: 'PM' });
+        }
+    } else {
+        slotsToFill = [
+            { key: 'SERUM_PM', type: 'SERUM', time: 'PM' }, 
+            { key: 'TREATMENT_PM', type: 'TREATMENT', time: 'PM' }, 
+            { key: 'SERUM_AM', type: 'SERUM', time: 'AM' }, 
+            { key: 'MOISTURIZER_PM', type: 'MOISTURIZER', time: 'PM' },
+            { key: 'TONER_PM', type: 'TONER', time: 'PM' },
+            { key: 'TONER_AM', type: 'TONER', time: 'AM' },
+            { key: 'SPF_AM', type: 'SPF', time: 'AM' },
+            { key: 'CLEANSER_PM', type: 'CLEANSER', time: 'PM' },
+            { key: 'CLEANSER_AM', type: 'CLEANSER', time: 'AM' }
+        ];
+    }
 
     slotsToFill.forEach(slot => {
-        const potentialMatches: { name: string, action: string }[] = [];
         const formulation = getFormulation(slot.type);
 
-        for (const ing of sortedActiveNeeds) {
-            if (usedIngredients.has(ing.name)) continue;
-            
-            const fitsVehicle = vehicleMap[slot.type]?.some(v => ing.name.includes(v));
-            if (!fitsVehicle) continue;
+        let primary = sortedActiveNeeds.find(p => {
+            const fitsVehicle = vehicleMap[slot.type]?.some(v => p.name.includes(v));
+            if (!fitsVehicle) return false;
 
-            const isPMOnly = ['Retinol', 'Retinal', 'Growth Factors', 'Glycolic Acid', 'AHA'].some(x => ing.name.includes(x));
-            const isAMOnly = ['Vitamin C', 'SPF'].some(x => ing.name.includes(x));
-            if (slot.time === 'AM' && isPMOnly) continue;
-            if (slot.time === 'PM' && isAMOnly) continue;
+            const isPMOnly = ['Retinol', 'Retinal', 'Growth Factors', 'Glycolic Acid', 'AHA', 'Tretinoin', 'Bakuchiol'].some(x => p.name.includes(x));
+            const isAMOnly = ['Vitamin C', 'SPF'].some(x => p.name.includes(x));
+            if (slot.time === 'AM' && isPMOnly) return false;
+            if (slot.time === 'PM' && isAMOnly) return false;
 
-            potentialMatches.push(ing);
-        }
+            return !usedIngredients.has(p.name);
+        });
 
-        if (potentialMatches.length > 0) {
-            const primary = potentialMatches[0];
-            const alternatives = potentialMatches.slice(1, 3).map(i => i.name);
+        if (primary) {
             usedIngredients.add(primary.name);
+            const alternatives = vehicleMap[slot.type]?.filter(n => n !== primary?.name).slice(0, 2) || [];
             
             plan[slot.key] = {
                 ingredients: [primary.name, ...alternatives],
                 vehicle: slot.type,
                 formulation: formulation,
-                benefit: primary.action,
-                actionType: slot.type === 'CLEANSER' ? 'Wash-off Treatment' : 'Leave-on Active'
+                benefit: `Goal: ${primary.action.replace(/\.$/, '')}`,
+                actionType: slot.type === 'CLEANSER' ? 'Wash-off Active' : 'Leave-on Active'
             };
         } else {
             let fallbackBenefit = "Maintenance";
-            let fallbackIngs = [] as string[];
+            let fallbackIngs = supportiveIngredients[slot.type] || ['Glycerin'];
             
             if (slot.type === 'CLEANSER') {
                 const isOily = metrics.oiliness < 50;
                 fallbackBenefit = isOily ? 'Oil Control' : 'Gentle Cleansing';
-                fallbackIngs = isOily ? ['Salicylic Acid', 'Tea Tree'] : ['Glycerin', 'Ceramides'];
+                if (isOily) fallbackIngs = ['Tea Tree', 'Clay']; 
             }
-            else if (slot.type === 'TONER') {
-                fallbackBenefit = 'pH Balance';
-                fallbackIngs = ['Hyaluronic Acid', 'Rose Water'];
-            }
-            else if (slot.type === 'SERUM') {
-                fallbackBenefit = slot.time === 'AM' ? 'Antioxidant Protection' : 'Repair & Recovery';
-                fallbackIngs = slot.time === 'AM' ? ['Vitamin E', 'Ferulic Acid'] : ['Peptides', 'Niacinamide'];
-            }
-            else if (slot.type === 'MOISTURIZER') {
-                fallbackBenefit = 'Barrier Support';
-                fallbackIngs = ['Ceramides', 'Squalane'];
-            }
-            else if (slot.type === 'SPF') {
-                fallbackBenefit = 'UV Defense';
-                fallbackIngs = ['Zinc Oxide', 'Avobenzone'];
-            }
-            else if (slot.type === 'TREATMENT') {
-                fallbackBenefit = 'Targeted Correction';
-                fallbackIngs = ['Spot Treatment', 'Patches'];
-            }
+            else if (slot.type === 'TONER') fallbackBenefit = 'pH Balance';
+            else if (slot.type === 'SERUM') fallbackBenefit = slot.time === 'AM' ? 'Antioxidant Protection' : 'Repair & Recovery';
+            else if (slot.type === 'MOISTURIZER') fallbackBenefit = 'Barrier Support';
+            else if (slot.type === 'SPF') fallbackBenefit = 'UV Defense';
+            else if (slot.type === 'TREATMENT') fallbackBenefit = 'Targeted Correction';
 
             plan[slot.key] = {
                 ingredients: fallbackIngs,
@@ -547,7 +588,7 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
     });
 
     return plan;
-  }, [prescription, metrics]);
+  }, [prescription, metrics, complexity]);
 
   const findBestMatch = (type: string, stepName: string) => {
       let candidates = shelf.filter(p => {
@@ -621,7 +662,7 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
                            <div className="w-6 h-6 rounded-full bg-teal-50 border border-teal-100 flex items-center justify-center shrink-0 text-teal-500">
                               <Target size={12} />
                            </div>
-                           <span className="text-[10px] font-bold uppercase tracking-widest text-teal-700">Goal: {rec.benefit}</span>
+                           <span className="text-[10px] font-bold uppercase tracking-widest text-teal-700">{rec.benefit}</span>
                        </div>
                        
                        <div className="grid grid-cols-2 gap-4 mb-4">
@@ -805,35 +846,6 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
              </div>
         </div>
 
-        {/* PRESCRIPTION PROTOCOL CARD */}
-        <div className="modern-card rounded-[2rem] p-8 animate-in slide-in-from-bottom-8 duration-700 delay-150">
-             <div className="mb-8">
-                <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                    <FlaskConical size={12} /> Prescribed Actives
-                </h4>
-                <div className="flex flex-wrap gap-2.5">
-                    {prescription.ingredients.map((ing, i) => (
-                        <div key={i} className={`bg-white border border-zinc-100 rounded-xl px-4 py-3 flex flex-col min-w-[100px] shadow-sm tech-reveal hover:border-teal-300 transition-colors cursor-default`} style={{ animationDelay: `${i * 100}ms` }}>
-                            <span className="text-xs font-bold text-zinc-900 mb-0.5">{ing.name}</span>
-                            <span className="text-[10px] text-zinc-400 font-medium">{ing.action}</span>
-                        </div>
-                    ))}
-                </div>
-            </div>
-
-            {prescription.avoid.length > 0 && (
-                <div className="bg-rose-50 border border-rose-100 rounded-2xl p-5 flex items-start gap-4 tech-reveal delay-300">
-                    <Ban size={18} className="text-rose-500 mt-0.5 shrink-0" />
-                    <div>
-                        <span className="text-xs font-bold text-rose-700 block uppercase mb-1 tracking-wide">Ingredients to Avoid</span>
-                        <p className="text-xs text-rose-600 leading-tight font-medium">
-                            {prescription.avoid.join(', ')}
-                        </p>
-                    </div>
-                </div>
-            )}
-        </div>
-
         <div className="space-y-6">
              <GroupSection title="Blemishes" score={groupAnalysis.blemishScore} delayClass="delay-200">
                  <MetricRing label="Acne" value={metrics.acneActive} metricKey="acneActive" onSelect={setSelectedMetric} />
@@ -862,7 +874,55 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
              </GroupSection>
         </div>
 
-        <div className="pt-8 animate-in slide-in-from-bottom-8 duration-700 delay-500 relative">
+        {/* PRESCRIPTION PROTOCOL CARD */}
+        <div className="modern-card rounded-[2rem] p-8 animate-in slide-in-from-bottom-8 duration-700 delay-500">
+             <div className="mb-8">
+                <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                    <FlaskConical size={12} /> Prescribed Actives
+                </h4>
+                
+                {prescription.hasSafetySwaps && (
+                    <div className="mb-6 p-4 bg-amber-50/70 border border-amber-100 rounded-2xl flex gap-3">
+                        <ShieldAlert size={18} className="text-amber-500 shrink-0 mt-0.5" />
+                        <div>
+                            <span className="text-xs font-bold text-amber-800 block mb-0.5">Barrier Safety Protocol</span>
+                            <p className="text-xs text-amber-700 leading-snug">
+                                Some standard actives were swapped for gentler alternatives because your current biometric health (Hydration/Sensitivity) is low.
+                            </p>
+                        </div>
+                    </div>
+                )}
+
+                <div className="flex flex-wrap gap-2.5">
+                    {prescription.ingredients.map((ing, i) => (
+                        <div key={i} className={`bg-white border rounded-xl px-4 py-3 flex flex-col min-w-[100px] shadow-sm tech-reveal hover:border-teal-300 transition-colors cursor-default relative ${ing.isSafetySwap ? 'border-amber-200 bg-amber-50/30' : 'border-zinc-100'}`} style={{ animationDelay: `${i * 100}ms` }}>
+                            {ing.isSafetySwap && <div className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-amber-400" title="Safety Swap" />}
+                            <span className="text-xs font-bold text-zinc-900 mb-0.5">{ing.name}</span>
+                            <span className="text-[10px] text-zinc-400 font-medium">{ing.action}</span>
+                            {ing.context && (
+                                <span className="text-[9px] text-amber-600 font-bold mt-1.5 pt-1.5 border-t border-dashed border-amber-200 block leading-tight">
+                                    {ing.context}
+                                </span>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {prescription.avoid.length > 0 && (
+                <div className="bg-rose-50 border border-rose-100 rounded-2xl p-5 flex items-start gap-4 tech-reveal delay-300">
+                    <Ban size={18} className="text-rose-500 mt-0.5 shrink-0" />
+                    <div>
+                        <span className="text-xs font-bold text-rose-700 block uppercase mb-1 tracking-wide">Ingredients to Avoid</span>
+                        <p className="text-xs text-rose-600 leading-tight font-medium">
+                            {prescription.avoid.join(', ')}
+                        </p>
+                    </div>
+                </div>
+            )}
+        </div>
+
+        <div className="pt-8 animate-in slide-in-from-bottom-8 duration-700 delay-700 relative">
             <div className="absolute top-24 bottom-12 left-[2.25rem] w-px bg-zinc-200 z-0 hidden sm:block origin-top animate-[scaleY_1s_ease-out_forwards] delay-700" style={{ transform: 'scaleY(0)', animationFillMode: 'forwards' }}></div>
 
             <div className="flex justify-between items-center mb-8 px-2 tech-reveal">
@@ -901,7 +961,17 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
                          <RoutineStep step={complexity === 'ADVANCED' ? "04" : "02"} type="SERUM" time="PM" />
                          {complexity === 'ADVANCED' && <RoutineStep step="05" type="TREATMENT" time="PM" />}
                          {complexity === 'ADVANCED' && <RoutineStep step="06" type="MOISTURIZER" time="PM" />}
-                         {complexity === 'BASIC' && <RoutineStep step="03" type="MOISTURIZER" time="PM" />}
+                         
+                         {/* Dynamic rendering for Basic PM step */}
+                         {complexity === 'BASIC' && (
+                             // If a moisturizer slot was created (because skin isn't oily), render it.
+                             // Otherwise, the slot will be for SERUM_PM.
+                             routinePlan['MOISTURIZER_PM'] ? (
+                                <RoutineStep step="03" type="MOISTURIZER" time="PM" />
+                             ) : (
+                                <RoutineStep step="03" type="SERUM" time="PM" />
+                             )
+                         )}
                     </>
                 )}
             </div>

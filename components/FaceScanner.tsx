@@ -242,6 +242,9 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
               if (ctx) {
                   ctx.drawImage(img, 0, 0, w, h);
                   
+                  // Run local analysis on the uploaded image to get deterministic anchor data
+                  const localMetrics = analyzeSkinFrame(ctx, w, h);
+                  
                   // Capture visual snapshot for UI
                   applyClinicalOverlays(ctx, w, h);
                   const displaySnapshot = canvas.toDataURL('image/jpeg', 0.9);
@@ -252,7 +255,8 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
                   applyMedicalProcessing(ctx, w, h);
                   const processedBase64 = canvas.toDataURL('image/jpeg', 0.9);
 
-                  analyzeFaceSkin(processedBase64).then(aiMetrics => {
+                  // Pass BOTH the image AND the local metrics to AI for consistency
+                  analyzeFaceSkin(processedBase64, localMetrics).then(aiMetrics => {
                       setAiProgress(100);
                       setTimeout(() => {
                         onScanComplete(aiMetrics, displaySnapshot);
@@ -336,11 +340,11 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
            const displayImage = captureSnapshot(video, true);
            setCapturedSnapshot(displayImage);
 
-           analyzeFaceSkin(processedImage).then(aiMetrics => {
+           // Pass averaged local metrics as anchor
+           analyzeFaceSkin(processedImage, avgLocalMetrics).then(aiMetrics => {
                setAiProgress(100);
                setTimeout(() => {
-                   // Merge local skin age calculation if AI doesn't return it
-                   const finalMetrics = { ...aiMetrics, skinAge: aiMetrics.skinAge || avgLocalMetrics.skinAge };
+                   const finalMetrics = { ...aiMetrics };
                    onScanComplete(finalMetrics, displayImage);
                }, 500);
            }).catch(err => {
@@ -375,9 +379,9 @@ const FaceScanner: React.FC<FaceScannerProps> = ({ onScanComplete }) => {
   }, [isScanning, scanFrame]);
 
   const getAIStatusText = (p: number) => {
-      if (p < 30) return "Enhancing Contrast...";
-      if (p < 60) return "Mapping Redness...";
-      if (p < 90) return "Analyzing Defects...";
+      if (p < 30) return "Validating Biometrics...";
+      if (p < 60) return "Consulting Database...";
+      if (p < 90) return "Refining Analysis...";
       return "Finalizing...";
   };
 

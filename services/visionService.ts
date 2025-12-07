@@ -1,6 +1,4 @@
 
-
-
 import { SkinMetrics } from '../types';
 
 /**
@@ -19,11 +17,11 @@ export const validateFrame = (
   let message = "Perfect";
   let instruction = "Hold steady...";
 
-  if (faceWidth < width * 0.1) {
+  if (faceWidth < width * 0.15) {
        return { isGood: false, message: "No Face", instruction: "Position face in circle", status: 'ERROR' };
   }
 
-  if (faceWidth < width * 0.2) {
+  if (faceWidth < width * 0.25) {
       status = 'WARNING';
       message = "Move Closer";
       instruction = "Move Closer";
@@ -36,11 +34,11 @@ export const validateFrame = (
   const p = ctx.getImageData(Math.floor(cx), Math.floor(cy), 1, 1).data;
   const luma = 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2];
 
-  if (luma < 30) {
+  if (luma < 40) {
       status = 'WARNING';
       message = "Low Light";
       instruction = "Face light source";
-  } else if (luma > 240) {
+  } else if (luma > 230) {
       status = 'WARNING';
       message = "Too Bright";
       instruction = "Reduce glare";
@@ -48,7 +46,7 @@ export const validateFrame = (
 
   if (lastFacePos) {
       const dist = Math.sqrt(Math.pow(cx - lastFacePos.cx, 2) + Math.pow(cy - lastFacePos.cy, 2));
-      if (dist > width * 0.15) { 
+      if (dist > width * 0.1) { 
           status = 'WARNING';
           message = "Hold Still";
           instruction = "Hold Still";
@@ -61,6 +59,8 @@ export const validateFrame = (
 const normalizeScore = (raw: number): number => {
     return Math.floor(Math.max(18, Math.min(98, raw)));
 };
+
+// --- COLOR SPACE CONVERSIONS ---
 
 const rgbToLab = (r: number, g: number, b: number) => {
     let r1 = r / 255, g1 = g / 255, b1 = b / 255;
@@ -83,11 +83,46 @@ const rgbToLab = (r: number, g: number, b: number) => {
     };
 };
 
+const labToRgb = (L: number, a: number, b: number) => {
+    let y = (L + 16) / 116;
+    let x = a / 500 + y;
+    let z = y - b / 200;
+
+    const x3 = x * x * x;
+    const y3 = y * y * y;
+    const z3 = z * z * z;
+
+    x = (x3 > 0.008856) ? x3 : (x - 16/116) / 7.787;
+    y = (y3 > 0.008856) ? y3 : (y - 16/116) / 7.787;
+    z = (z3 > 0.008856) ? z3 : (z - 16/116) / 7.787;
+
+    x = x * 0.95047;
+    y = y * 1.00000;
+    z = z * 1.08883;
+
+    let r = x * 3.2406 + y * -1.5372 + z * -0.4986;
+    let g = x * -0.9689 + y * 1.8758 + z * 0.0415;
+    let bl = x * 0.0557 + y * -0.2040 + z * 1.0570;
+
+    r = (r > 0.0031308) ? (1.055 * Math.pow(r, 1/2.4) - 0.055) : 12.92 * r;
+    g = (g > 0.0031308) ? (1.055 * Math.pow(g, 1/2.4) - 0.055) : 12.92 * g;
+    bl = (bl > 0.0031308) ? (1.055 * Math.pow(bl, 1/2.4) - 0.055) : 12.92 * bl;
+
+    return {
+        r: Math.max(0, Math.min(255, Math.round(r * 255))),
+        g: Math.max(0, Math.min(255, Math.round(g * 255))),
+        b: Math.max(0, Math.min(255, Math.round(bl * 255)))
+    };
+};
+
+// --- IMAGE ENHANCEMENT ---
+
 /**
- * APPLIES DERMATOLOGICAL FILTERS:
- * 1. High Contrast (to enhance dark spots, scars)
- * 2. Red Boost (to enhance active acne/inflammation)
- * 3. Sharpening (to detect uneven skin texture)
+ * APPLIES SMART DERMATOLOGICAL ENHANCEMENT:
+ * 1. Converts to Lab Space.
+ * 2. Boosts 'a' channel (Red-Green) for inflammation detection WITHOUT affecting 'b' (Skin Tone).
+ * 3. Enhances local contrast in 'L' channel for texture/spot detection.
+ * 4. Normalizes brightness to ensure consistency across environments.
  */
 export const applyMedicalProcessing = (
     ctx: CanvasRenderingContext2D,
@@ -99,57 +134,52 @@ export const applyMedicalProcessing = (
     const output = ctx.createImageData(width, height);
     const dst = output.data;
 
-    const contrast = 1.25; // Enhance dark spots/tone
-    const intercept = 128 * (1 - contrast);
-
-    // Convolution Kernel for Sharpening (High Definition)
-    //  0 -1  0
-    // -1  5 -1
-    //  0 -1  0
-    const kernel = [0, -1, 0, -1, 5, -1, 0, -1, 0];
-    const kWeight = 1; // Sum of kernel
+    // 1. First Pass: Calculate Average Luminance for Normalization
+    let totalL = 0;
+    const sampleRate = 10;
+    let samples = 0;
+    for (let i = 0; i < data.length; i += 4 * sampleRate) {
+        // Fast approx luminance
+        totalL += (0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]);
+        samples++;
+    }
+    const avgL = samples > 0 ? totalL / samples : 127;
+    const targetL = 135; // Target slightly bright/clean look
+    const exposureFactor = targetL / (avgL || 1); 
 
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
             const idx = (y * width + x) * 4;
             
-            // 1. SHARPENING CONVOLUTION
-            let r = 0, g = 0, b = 0;
-            if (x > 0 && x < width - 1 && y > 0 && y < height - 1) {
-                // Apply 3x3 kernel
-                let kIndex = 0;
-                for (let ky = -1; ky <= 1; ky++) {
-                    for (let kx = -1; kx <= 1; kx++) {
-                        const nIdx = ((y + ky) * width + (x + kx)) * 4;
-                        const weight = kernel[kIndex++];
-                        r += data[nIdx] * weight;
-                        g += data[nIdx + 1] * weight;
-                        b += data[nIdx + 2] * weight;
-                    }
-                }
-            } else {
-                // Edge case: keep original
-                r = data[idx]; g = data[idx+1]; b = data[idx+2];
-            }
+            // Apply Exposure Correction
+            let r = data[idx] * exposureFactor;
+            let g = data[idx+1] * exposureFactor;
+            let b = data[idx+2] * exposureFactor;
 
-            // 2. CONTRAST BOOST (Enhance Uneven Tone/Scars)
-            r = (r * contrast) + intercept;
-            g = (g * contrast) + intercept;
-            b = (b * contrast) + intercept;
+            // Convert to Lab for selective boosting
+            const lab = rgbToLab(r, g, b);
 
-            // 3. RED CHANNEL BOOST (Enhance Active Acne/Sensitivity)
-            // If pixel is generally skin-colored (Red > Blue & Red > Green), boost Red specifically
-            if (r > g && r > b) {
-                r = r * 1.15; // 15% Red Boost for inflammation detection
-                // Slight desaturation of other channels to make red pop
-                g = g * 0.95;
-            }
+            // 2. Selective Red Boost (Inflammation)
+            // We boost 'a' channel. 
+            // 'a' positive = red/magenta, negative = green.
+            // We want to separate redness from skin tone.
+            lab.a = lab.a * 1.35; // 35% boost to redness sensitivity
 
-            // Clamp values
-            dst[idx] = Math.min(255, Math.max(0, r));
-            dst[idx + 1] = Math.min(255, Math.max(0, g));
-            dst[idx + 2] = Math.min(255, Math.max(0, b));
-            dst[idx + 3] = 255; // Alpha
+            // 3. Local Contrast / Texture Enhancement (Simulated Unsharp Mask)
+            // S-curve contrast on L channel
+            const normalizedL = lab.L / 100;
+            const contrastL = normalizedL < 0.5 
+                ? 2 * normalizedL * normalizedL 
+                : -1 + (4 - 2 * normalizedL) * normalizedL;
+            lab.L = (normalizedL * 0.7 + contrastL * 0.3) * 100; // Blend 30% contrast
+
+            // 4. Convert back to RGB
+            const finalRgb = labToRgb(lab.L, lab.a, lab.b);
+
+            dst[idx] = finalRgb.r;
+            dst[idx+1] = finalRgb.g;
+            dst[idx+2] = finalRgb.b;
+            dst[idx+3] = 255;
         }
     }
 
@@ -165,15 +195,16 @@ export const applyClinicalOverlays = (
     const { cx, cy, faceWidth, faceHeight } = detectFaceBounds(ctx, width, height);
     if (faceWidth === 0) return;
 
-    // Apply the medical enhancement filter FIRST
-    // This physically alters the canvas image to show the effect
+    // Apply the smart enhancement filter FIRST
+    // This physically alters the canvas image to show the effect to the user/AI
     applyMedicalProcessing(ctx, width, height);
 
     const imageData = ctx.getImageData(0, 0, width, height);
     const data = imageData.data;
+    
+    // Recalculate stats on the ENHANCED image for overlay logic
     const stats = getSkinStats(imageData);
 
-    // 2. Technical Pinpointing (Crosshairs) on the ENHANCED image
     ctx.lineWidth = 1; 
     const scanStep = 6; 
     
@@ -196,20 +227,19 @@ export const applyClinicalOverlays = (
             const { L, a } = rgbToLab(r,g,b);
 
             // Inflammation / Acne (Red Crosshair)
-            // Threshold adapted for the boosted red channel
-            if (a > stats.meanA + 18) {
+            // Use relative threshold based on face average 'a'
+            if (a > stats.meanA + 15) {
                 const size = 3;
-                ctx.strokeStyle = 'rgba(255, 40, 40, 0.7)'; // Bright Red
+                ctx.strokeStyle = 'rgba(255, 40, 40, 0.6)'; // Red
                 ctx.beginPath();
                 ctx.moveTo(x - size, y); ctx.lineTo(x + size, y);
                 ctx.moveTo(x, y - size); ctx.lineTo(x, y + size);
                 ctx.stroke();
             }
-            // Pores / Dark Spots (Cyan Crosshair)
-            // Threshold adapted for high contrast
-            else if (L < stats.meanL - 30) {
-                 const size = 2;
-                 ctx.fillStyle = 'rgba(0, 255, 255, 0.6)'; 
+            // Pores / Dark Spots (Cyan Dots)
+            // Use relative threshold based on face average 'L'
+            else if (L < stats.meanL - 25) {
+                 ctx.fillStyle = 'rgba(0, 255, 255, 0.5)'; 
                  ctx.fillRect(x, y, 1.5, 1.5);
             }
         }
@@ -217,7 +247,7 @@ export const applyClinicalOverlays = (
 };
 
 const isSkinPixel = (r: number, g: number, b: number): boolean => {
-    return (r > 60 && g > 40 && b > 20 && r > g && r > b && Math.abs(r - g) > 10);
+    return (r > 40 && g > 20 && b > 10 && r > g && r > b);
 };
 
 const detectFaceBounds = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
@@ -246,10 +276,31 @@ const detectFaceBounds = (ctx: CanvasRenderingContext2D, width: number, height: 
 };
 
 const getNormalizedROI = (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) => {
+    // Safety crop
     if (x < 0) x = 0; if (y < 0) y = 0;
     w = Math.min(w, ctx.canvas.width - x);
     h = Math.min(h, ctx.canvas.height - y);
-    return ctx.getImageData(x, y, w, h); 
+    
+    // Get Raw Data
+    const imgData = ctx.getImageData(x, y, w, h);
+    
+    // NORMALIZE ROI LIGHTING
+    // This ensures that 'Metric Calculation' is done on a balanced image
+    let sumL = 0;
+    for(let i=0; i<imgData.data.length; i+=4) {
+        sumL += (0.299*imgData.data[i] + 0.587*imgData.data[i+1] + 0.114*imgData.data[i+2]);
+    }
+    const mean = sumL / (imgData.data.length/4);
+    const target = 135;
+    const factor = target / (mean || 1);
+
+    for(let i=0; i<imgData.data.length; i+=4) {
+        imgData.data[i] = Math.min(255, imgData.data[i] * factor);
+        imgData.data[i+1] = Math.min(255, imgData.data[i+1] * factor);
+        imgData.data[i+2] = Math.min(255, imgData.data[i+2] * factor);
+    }
+
+    return imgData; 
 };
 
 function getSkinStats(img: ImageData) {
@@ -257,6 +308,8 @@ function getSkinStats(img: ImageData) {
     let count = 0;
     const step = 16;
     for (let i = 0; i < img.data.length; i += step) {
+         // Skip black pixels (mask)
+         if (img.data[i+3] === 0) continue;
          const { L, a } = rgbToLab(img.data[i], img.data[i+1], img.data[i+2]);
          sumL += L; sumA += a; count++;
     }
@@ -264,49 +317,68 @@ function getSkinStats(img: ImageData) {
     return { meanL: sumL / count, meanA: sumA / count };
 }
 
-// ... (Rest of algorithms kept as is) ...
-// 1. Redness
+// 1. Redness (Relative to self)
 function calculateRedness(img: ImageData): number {
     const stats = getSkinStats(img);
     let rednessSeverity = 0;
     let count = 0;
+    // We look for pixels that are significantly redder than the face's average
+    const threshold = 10; 
     for (let i = 0; i < img.data.length; i += 16) {
          const { a } = rgbToLab(img.data[i], img.data[i+1], img.data[i+2]);
-         if (a > stats.meanA + 8) rednessSeverity += (a - stats.meanA);
+         if (a > stats.meanA + threshold) {
+             rednessSeverity += (a - (stats.meanA + threshold));
+         }
          count++;
     }
     const avgSeverity = count > 0 ? rednessSeverity / count : 0;
-    return 100 - (avgSeverity * 5); 
+    // Lower score is worse. Severity 0 = Score 100. Severity 10 = Score ~50
+    return Math.max(10, 100 - (avgSeverity * 4)); 
 }
 
-// 2. Blemishes
+// 2. Blemishes (Relative to self)
 function calculateBlemishes(img: ImageData): { active: number, scars: number } {
     const stats = getSkinStats(img);
     let activePixels = 0;
     let scarPixels = 0;
     let count = 0;
+    
+    // REDUCED SENSITIVITY: To distinguish peeling from acne, we require higher threshold for "Acne"
+    // Peeling often creates high-frequency noise, so single pixels are less likely to be acne.
+    // In a full CV system we'd use blob detection, here we use strict color thresholds.
     for (let i = 0; i < img.data.length; i += 16) {
         const { L, a } = rgbToLab(img.data[i], img.data[i+1], img.data[i+2]);
-        if (a > stats.meanA + 12) activePixels++;
-        if (L < stats.meanL - 15) scarPixels++;
+        // Active: High Redness. Increased threshold to 18 (from 15) to avoid catching minor inflammation/peeling
+        if (a > stats.meanA + 18) activePixels++;
+        // Scars: Darker than average. Increased threshold to -25 (from -20) to avoid catching shadows from peeling
+        if (L < stats.meanL - 25) scarPixels++;
         count++;
     }
+    const activeScore = count > 0 ? 100 - (activePixels / count) * 600 : 100;
+    const scarScore = count > 0 ? 100 - (scarPixels / count) * 400 : 100;
     return {
-        active: count > 0 ? 100 - (activePixels / count) * 800 : 100,
-        scars: count > 0 ? 100 - (scarPixels / count) * 500 : 100
+        active: Math.max(10, activeScore),
+        scars: Math.max(10, scarScore)
     };
 }
 
-// 4. Hydration
+// 4. Hydration (Gloss analysis)
 function calculateHydration(img: ImageData): number {
     let glowPixels = 0;
     const total = img.data.length / 4;
     for (let i = 0; i < img.data.length; i += 16) {
-        const l = (0.299*img.data[i] + 0.587*img.data[i+1] + 0.114*img.data[i+2]);
-        if (l > 180 && l < 240) glowPixels++;
+        const r = img.data[i], g = img.data[i+1], b = img.data[i+2];
+        const l = 0.299*r + 0.587*g + 0.114*b;
+        const max = Math.max(r,g,b);
+        const min = Math.min(r,g,b);
+        const sat = max === 0 ? 0 : (max-min)/max;
+        
+        // Healthy glow: High Luma, Low-Mid Saturation
+        if (l > 170 && l < 245 && sat < 0.4) glowPixels++;
     }
     const ratio = total > 0 ? glowPixels / total : 0;
-    return 100 - Math.abs(ratio - 0.15) * 400; 
+    // Target ratio ~10-15% for healthy glow. Too high = Oily. Too low = Dry.
+    return Math.max(10, 100 - Math.abs(ratio - 0.12) * 300); 
 }
 
 // 5. Oiliness
@@ -315,40 +387,45 @@ function calculateOiliness(img: ImageData): number {
     const total = img.data.length / 4;
     for (let i = 0; i < img.data.length; i += 16) {
         const r = img.data[i], g = img.data[i+1], b = img.data[i+2];
-        const l = (Math.max(r,g,b) + Math.min(r,g,b)) / 2;
-        const s = (Math.max(r,g,b) - Math.min(r,g,b)) / (255 - Math.abs(2*l - 255));
-        if (l > 210 && s < 0.2) shinePixels++;
+        const l = 0.299*r + 0.587*g + 0.114*b;
+        const max = Math.max(r,g,b);
+        const min = Math.min(r,g,b);
+        const sat = max === 0 ? 0 : (max-min)/max;
+        
+        // Oil: Very High Luma, Very Low Saturation (Pure white reflection)
+        if (l > 220 && sat < 0.15) shinePixels++;
     }
-    return total > 0 ? 100 - (shinePixels / total) * 800 : 100; 
+    const score = total > 0 ? 100 - (shinePixels / total) * 600 : 100;
+    return Math.max(10, score); 
 }
 
-// 6. Wrinkles
+// 6. Wrinkles (Edge density)
 function calculateWrinkles(img: ImageData): { fine: number, deep: number } {
     const w = img.width;
     const h = img.height;
     const data = img.data;
     let fineEdges = 0;
     let deepEdges = 0;
+    // Simple edge detection
     for (let y = 1; y < h - 1; y += 2) {
         for (let x = 1; x < w - 1; x += 2) {
-            const c = data[((y)*w+x)*4+1];
-            const n = data[((y-1)*w+x)*4+1];
-            const s = data[((y+1)*w+x)*4+1];
-            const e = data[((y)*w+(x+1))*4+1];
-            const wPx = data[((y)*w+(x-1))*4+1];
-            const delta = Math.abs(4*c - n - s - e - wPx);
-            if (delta > 10 && delta < 25) fineEdges++;
-            if (delta >= 25) deepEdges++;
+            const idx = ((y)*w+x)*4;
+            const c = (data[idx] + data[idx+1] + data[idx+2])/3;
+            const n = (data[((y-1)*w+x)*4] + data[((y-1)*w+x)*4+1] + data[((y-1)*w+x)*4+2])/3;
+            
+            const delta = Math.abs(c - n);
+            if (delta > 15 && delta < 35) fineEdges++;
+            if (delta >= 35) deepEdges++;
         }
     }
     const total = (w * h) / 4;
     return {
-        fine: 100 - (fineEdges / total) * 200,
-        deep: 100 - (deepEdges / total) * 100
+        fine: Math.max(10, 100 - (fineEdges / total) * 150),
+        deep: Math.max(10, 100 - (deepEdges / total) * 100)
     };
 }
 
-// 8. Dark Circles
+// 8. Dark Circles (Contrast vs Cheek)
 function calculateDarkCircles(eyeImg: ImageData, cheekImg: ImageData): number {
     const getLuma = (d: ImageData) => {
         let sum = 0;
@@ -356,14 +433,20 @@ function calculateDarkCircles(eyeImg: ImageData, cheekImg: ImageData): number {
         for(let i=0; i<d.data.length; i+=4) sum += (0.299*d.data[i] + 0.587*d.data[i+1] + 0.114*d.data[i+2]);
         return sum / (d.data.length/4);
     }
-    return 100 - (Math.max(0, getLuma(cheekImg) - getLuma(eyeImg) - 5) * 2);
+    const eyeL = getLuma(eyeImg);
+    const cheekL = getLuma(cheekImg);
+    // Dark circles are darker than cheek. 
+    const diff = Math.max(0, cheekL - eyeL);
+    // Tolerance of 5 units. Penalty for everything else.
+    return Math.max(20, 100 - (Math.max(0, diff - 5) * 2.5));
 }
 
-// 9. Sagging
+// 9. Sagging (Contrast at jawline)
 function calculateSagging(jawImg: ImageData): number {
     const w = jawImg.width;
     const h = jawImg.height;
     let totalContrast = 0;
+    // We want HIGH contrast at the jaw edge (sharp line). Low contrast = sagging/jowls.
     for (let x = 0; x < w; x+=4) {
         let colContrast = 0;
         for (let y = 1; y < h-1; y+=2) {
@@ -373,11 +456,12 @@ function calculateSagging(jawImg: ImageData): number {
         }
         totalContrast += colContrast;
     }
-    const score = (w*h > 0) ? (totalContrast / (w * h)) * 10 : 50;
-    return Math.min(100, Math.max(20, score));
+    const avgContrast = (w*h > 0) ? totalContrast / (w * h) : 0;
+    // Normalize: Contrast of 5 is bad, 20 is good.
+    return Math.min(100, Math.max(20, avgContrast * 4 + 30));
 }
 
-// 10. Pores
+// 10. Pores (Local Contrast in L channel)
 function calculatePores(noseImg: ImageData): { pores: number, blackheads: number } {
     const stats = getSkinStats(noseImg);
     let largePores = 0;
@@ -385,13 +469,15 @@ function calculatePores(noseImg: ImageData): { pores: number, blackheads: number
     let count = 0;
     for (let i = 0; i < noseImg.data.length; i += 16) {
         const { L } = rgbToLab(noseImg.data[i], noseImg.data[i+1], noseImg.data[i+2]);
-        if (L < stats.meanL - 20) blackheads++;
-        else if (L < stats.meanL - 10) largePores++;
+        // Blackheads: Very dark spots relative to mean
+        if (L < stats.meanL - 30) blackheads++;
+        // Pores: Moderately dark spots
+        else if (L < stats.meanL - 15) largePores++;
         count++;
     }
     return {
-        pores: count > 0 ? 100 - (largePores / count) * 400 : 100,
-        blackheads: count > 0 ? 100 - (blackheads / count) * 600 : 100
+        pores: count > 0 ? Math.max(10, 100 - (largePores / count) * 300) : 100,
+        blackheads: count > 0 ? Math.max(10, 100 - (blackheads / count) * 500) : 100
     };
 }
 
@@ -410,6 +496,8 @@ export const analyzeSkinFrame = (
   const noseY = cy + faceHeight * 0.1;
   const jawY = cy + faceHeight * 0.45;
 
+  // IMPORTANT: These ROIs are NORMALIZED (lighting corrected) inside getNormalizedROI
+  // This ensures scores are consistent regardless of environment
   const foreheadData = getNormalizedROI(ctx, cx - roiSize, foreheadY, roiSize*2, roiSize*0.6);
   const leftCheekData = getNormalizedROI(ctx, cx - faceWidth * 0.28, cheekY, roiSize, roiSize);
   const rightCheekData = getNormalizedROI(ctx, cx + faceWidth * 0.08, cheekY, roiSize, roiSize);
@@ -443,25 +531,33 @@ export const analyzeSkinFrame = (
       (darkCircles * 0.5) 
   ) / 11.4;
 
-  const overallScore = normalizeScore(weightedScore);
+  // "Weakest Link" Penalty Logic:
+  // If a critical area (Barrier or Acne) is severe, the Overall Score shouldn't be high 
+  // just because other areas are perfect.
+  const lowestMetric = Math.min(acneActive, redness, texture, hydration);
+  let finalScore = weightedScore;
   
-  // Calculate Skin Age based on deficits from perfect score (100)
-  // Baseline assumption: 25 years old if perfect.
-  // Add years for distinct aging markers.
+  if (lowestMetric < 50) {
+      // If any critical metric is failing (<50), cap the max score and apply penalty
+      // This prevents a score of 77 when redness is 30.
+      const penalty = (50 - lowestMetric) * 0.5;
+      finalScore = Math.min(weightedScore, 65) - penalty;
+  }
+
+  const overallScore = normalizeScore(finalScore);
+  
   let estimatedAge = 25;
-  if (wrinkleDeep < 90) estimatedAge += (90 - wrinkleDeep) * 0.5; // Deep wrinkles add significant age
+  if (wrinkleDeep < 90) estimatedAge += (90 - wrinkleDeep) * 0.5;
   if (wrinkleFine < 90) estimatedAge += (90 - wrinkleFine) * 0.2;
   if (sagging < 90) estimatedAge += (90 - sagging) * 0.4;
   if (pigmentation < 90) estimatedAge += (90 - pigmentation) * 0.2;
-  if (darkCircles < 80) estimatedAge += (80 - darkCircles) * 0.1;
   
-  // Bonus: Good texture reduces estimated age slightly
   if (texture > 90) estimatedAge -= 2;
   if (hydration > 90) estimatedAge -= 1;
 
   return {
     overallScore: overallScore,
-    skinAge: Math.floor(estimatedAge), // Add Skin Age
+    skinAge: Math.floor(Math.max(18, estimatedAge)), 
     acneActive: normalizeScore(acneActive),
     acneScars: normalizeScore(acneScars),
     poreSize: normalizeScore(poreSize),
@@ -486,9 +582,16 @@ export const drawBiometricOverlay = (
   metrics: SkinMetrics
 ) => {
   const { cx, cy, faceWidth } = detectFaceBounds(ctx, width, height);
-  ctx.strokeStyle = "rgba(16, 185, 129, 0.4)"; 
+  // Dynamic color based on score
+  const color = metrics.overallScore > 80 ? "16, 185, 129" : metrics.overallScore > 60 ? "245, 158, 11" : "244, 63, 94";
+  
+  ctx.strokeStyle = `rgba(${color}, 0.5)`; 
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.arc(cx, cy, faceWidth * 0.6, 0, Math.PI * 2);
   ctx.stroke();
+
+  // Subtle Scan Lines
+  ctx.fillStyle = `rgba(${color}, 0.1)`;
+  ctx.fillRect(cx - faceWidth * 0.6, cy, faceWidth * 1.2, 2);
 };
