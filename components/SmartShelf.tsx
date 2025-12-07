@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { Product, UserProfile, SkinMetrics } from '../types';
-import { Plus, Droplet, Sun, Zap, Sparkles, AlertTriangle, Layers, AlertOctagon, Target, ShieldCheck, X, FlaskConical, Clock, Ban, ArrowRightLeft, CheckCircle2, Microscope, Dna, Palette, Brush, SprayCan, Stamp } from 'lucide-react';
+import { Plus, Droplet, Sun, Zap, Sparkles, AlertTriangle, Layers, AlertOctagon, Target, ShieldCheck, X, FlaskConical, Clock, Ban, ArrowRightLeft, CheckCircle2, Microscope, Dna, Palette, Brush, SprayCan, Stamp, DollarSign, TrendingUp, TrendingDown, Wallet, ArrowUpRight } from 'lucide-react';
 import { auditProduct, analyzeShelfHealth, analyzeProductContext } from '../services/geminiService';
 
 interface SmartShelfProps {
@@ -27,6 +27,56 @@ const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onSc
           return products.filter(p => makeupTypes.includes(p.type));
       }
   }, [products, activeTab]);
+
+  const costAnalysis = useMemo(() => {
+      let totalValue = 0;
+      let monthlyCost = 0;
+
+      products.forEach(p => {
+          const price = p.estimatedPrice || 85; // Default fallback to RM 85
+          totalValue += price;
+
+          // Estimate monthly cost based on depletion rate (Heuristics)
+          // Adjust estimates for realistic usage (e.g. Cleansers last 3m, Serum 2m)
+          let durationMonths = 3;
+          
+          if (makeupTypes.includes(p.type)) {
+               durationMonths = 6; // Makeup lasts longer
+          } else if (p.type === 'SPF') {
+               durationMonths = 1.5; // SPF is high usage
+          } else if (p.type === 'SERUM' || p.type === 'TREATMENT') {
+               durationMonths = 2; // Small bottles
+          } else if (p.type === 'CLEANSER' || p.type === 'TONER') {
+               durationMonths = 3; // Large bottles
+          } else if (p.type === 'MOISTURIZER') {
+               durationMonths = 2.5;
+          }
+
+          monthlyCost += price / durationMonths;
+      });
+
+      const grade = shelfIQ.analysis.grade;
+      let verdict = { 
+          title: "Balanced Investment", 
+          desc: "Spending aligns with routine quality.", 
+          icon: Wallet, 
+          color: "text-zinc-600 bg-zinc-50 border-zinc-100" 
+      };
+
+      // Malaysian Market Thresholds (RM)
+      // Low: < RM 150/mo | High: > RM 400/mo
+      if ((grade === 'S' || grade === 'A') && monthlyCost < 150) {
+          verdict = { title: "Value Genius", desc: "Top-tier results on a budget.", icon: TrendingUp, color: "text-emerald-600 bg-emerald-50 border-emerald-100" };
+      } else if ((grade === 'S' || grade === 'A') && monthlyCost > 400) {
+          verdict = { title: "Luxury Performance", desc: "High investment yielding high results.", icon: Sparkles, color: "text-purple-600 bg-purple-50 border-purple-100" };
+      } else if ((grade === 'C' || grade === 'D') && monthlyCost > 250) {
+          verdict = { title: "Critical Waste", desc: "High spend on ineffective products.", icon: TrendingDown, color: "text-rose-600 bg-rose-50 border-rose-100" };
+      } else if ((grade === 'C' || grade === 'D') && monthlyCost < 100) {
+          verdict = { title: "Budget Mismatch", desc: "Low cost, but needs optimization.", icon: AlertTriangle, color: "text-amber-600 bg-amber-50 border-amber-100" };
+      }
+
+      return { totalValue: Math.round(totalValue), monthlyCost: Math.round(monthlyCost), verdict };
+  }, [products, shelfIQ]);
 
   const getProductColor = (type: string) => {
       switch(type) {
@@ -201,6 +251,37 @@ const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onSc
                         ))}
                    </div>
                </div>
+               
+               {/* COST ANALYSIS CARD */}
+               <div className="modern-card rounded-[2rem] p-6 relative overflow-hidden">
+                   <div className="flex justify-between items-center mb-6">
+                        <h3 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2">
+                            <DollarSign size={12} className="text-teal-500" /> Cost vs Grade Analysis
+                        </h3>
+                        <div className={`px-2 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wide flex items-center gap-1.5 border ${costAnalysis.verdict.color}`}>
+                             <costAnalysis.verdict.icon size={12} />
+                             {costAnalysis.verdict.title}
+                        </div>
+                   </div>
+                   
+                   <div className="flex items-baseline gap-1 mb-1">
+                        <span className="text-xs font-bold text-zinc-500 self-start mt-1">RM</span>
+                        <span className="text-4xl font-black text-zinc-900 tracking-tight">{costAnalysis.monthlyCost}</span>
+                        <span className="text-xs text-zinc-400 font-bold uppercase tracking-wide">/mo est.</span>
+                   </div>
+                   <p className="text-xs text-zinc-500 font-medium mb-6 leading-relaxed">{costAnalysis.verdict.desc}</p>
+                   
+                   <div className="flex gap-4 pt-4 border-t border-zinc-100">
+                        <div>
+                             <span className="block text-xs font-bold text-zinc-900">RM {costAnalysis.totalValue}</span>
+                             <span className="text-[9px] font-bold text-zinc-400 uppercase tracking-wide">Total Inventory</span>
+                        </div>
+                        <div>
+                             <span className="block text-xs font-bold text-zinc-900">{products.length} Items</span>
+                             <span className="text-[9px] font-bold text-zinc-400 uppercase tracking-wide">Routine Size</span>
+                        </div>
+                   </div>
+               </div>
 
                {/* OPTIMIZATION ACTIONS */}
                {renderActionPlan()}
@@ -304,7 +385,10 @@ const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onSc
 
                         <div className="flex-1 w-full">
                             <h3 className="font-bold text-sm text-zinc-900 leading-tight mb-1 line-clamp-2">{p.name}</h3>
-                            <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-wide mb-4 truncate">{p.brand || 'Unknown'}</p>
+                            <div className="flex justify-between items-center mb-4">
+                                <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-wide truncate max-w-[70px]">{p.brand || 'Unknown'}</p>
+                                <span className="text-[10px] font-bold text-zinc-300">RM {p.estimatedPrice || 85}</span>
+                            </div>
                         </div>
 
                         <div className={`inline-flex items-center px-2.5 py-1.5 rounded-lg text-[10px] font-bold tracking-wide ${
@@ -357,7 +441,7 @@ const SmartShelf: React.FC<SmartShelfProps> = ({ products, onRemoveProduct, onSc
                             {getProductIcon(selectedProduct.type)}
                         </div>
                         <h3 className="text-2xl font-black text-zinc-900 leading-tight mb-2 tracking-tight">{selectedProduct.name}</h3>
-                        <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest">{selectedProduct.brand}</p>
+                        <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest">{selectedProduct.brand} • RM {selectedProduct.estimatedPrice || 85}</p>
                     </div>
 
                     <div className="space-y-6">

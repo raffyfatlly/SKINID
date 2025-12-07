@@ -97,6 +97,7 @@ const getFallbackProduct = (userMetrics?: SkinMetrics): Product => ({
     risks: [],
     benefits: [],
     suitabilityScore: 60,
+    estimatedPrice: 85, // RM
     type: 'MOISTURIZER',
     dateScanned: Date.now()
 });
@@ -212,7 +213,7 @@ export const analyzeFaceSkin = async (imageBase64: string, localMetrics?: SkinMe
 
 export const analyzeProductImage = async (imageBase64: string, userMetrics?: SkinMetrics): Promise<Product> => {
     return runWithRetry(async (ai) => {
-        let promptText = "Extract product name, brand, type (CLEANSER, TONER, SERUM, MOISTURIZER, SPF, TREATMENT, FOUNDATION, CONCEALER, POWDER, PRIMER, SETTING_SPRAY, BLUSH, BRONZER), and ingredients. Analyze suitability (0-100). Return JSON.";
+        let promptText = "Extract product name, brand, type (CLEANSER, TONER, SERUM, MOISTURIZER, SPF, TREATMENT, FOUNDATION, CONCEALER, POWDER, PRIMER, SETTING_SPRAY, BLUSH, BRONZER), ingredients, and Estimated Retail Price in MYR (Malaysian Ringgit). Analyze suitability (0-100). Return JSON.";
         
         if (userMetrics) {
             promptText = `
@@ -223,9 +224,10 @@ export const analyzeProductImage = async (imageBase64: string, userMetrics?: Ski
             - Aging Signs: ${userMetrics.wrinkleFine} (Lower is more wrinkles)
             
             1. Extract Name, Brand, Type (CLEANSER, TONER, SERUM, MOISTURIZER, SPF, TREATMENT, FOUNDATION, CONCEALER, POWDER, PRIMER, SETTING_SPRAY, BLUSH, BRONZER), and Ingredients.
-            2. Calculate a 'suitabilityScore' (0-100) specifically for THIS user based on ingredients vs their profile.
+            2. Estimate the "estimatedPrice" (average retail price in MYR / Malaysian Ringgit). Use Malaysian market context (Watsons MY, Sephora MY, Shopee Mall MY) for pricing. Return just the number (e.g. 50, not RM 50).
+            3. Calculate a 'suitabilityScore' (0-100) specifically for THIS user based on ingredients vs their profile.
                - For COSMETICS (Foundation, etc): Check for comedogenic ingredients (pore clogging) if acne score is low. Check for irritants if sensitivity is high.
-            3. List specific Risks and Benefits for THIS user.
+            4. List specific Risks and Benefits for THIS user.
             Return JSON.
             `;
         }
@@ -249,6 +251,7 @@ export const analyzeProductImage = async (imageBase64: string, userMetrics?: Ski
                         type: { type: Type.STRING },
                         ingredients: { type: Type.ARRAY, items: { type: Type.STRING } },
                         suitabilityScore: { type: Type.NUMBER },
+                        estimatedPrice: { type: Type.NUMBER },
                         risks: { 
                             type: Type.ARRAY, 
                             items: { 
@@ -292,6 +295,7 @@ export const analyzeProductImage = async (imageBase64: string, userMetrics?: Ski
             risks: data.risks || [],
             benefits: data.benefits || [],
             suitabilityScore: finalScore,
+            estimatedPrice: data.estimatedPrice || 85,
             dateScanned: Date.now()
         };
     }, getFallbackProduct(userMetrics));
