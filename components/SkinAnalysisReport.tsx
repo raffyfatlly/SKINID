@@ -661,7 +661,7 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
 
   return (
     <div className="space-y-12 pb-32">
-        {/* HERO SELFIE - UPDATED FOR CLEARER OVERLAY VISIBILITY */}
+        {/* HERO SELFIE */}
         <div className="modern-card rounded-[2.5rem] overflow-hidden relative group hover:shadow-2xl transition-shadow duration-500">
             <div className="relative w-full overflow-hidden aspect-[4/5] sm:aspect-[16/9] bg-black">
                  {userProfile.faceImage ? (
@@ -756,32 +756,6 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
                         </div>
                     </div>
                 )}
-
-                <div className="mb-8">
-                    <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                        <FlaskConical size={12} /> Prescribed Actives
-                    </h4>
-                    <div className="flex flex-wrap gap-2.5">
-                        {prescription.ingredients.map((ing, i) => (
-                            <div key={i} className={`bg-white border border-zinc-100 rounded-xl px-4 py-3 flex flex-col min-w-[100px] shadow-sm tech-reveal hover:border-teal-300 transition-colors cursor-default`} style={{ animationDelay: `${i * 100}ms` }}>
-                                <span className="text-xs font-bold text-zinc-900 mb-0.5">{ing.name}</span>
-                                <span className="text-[10px] text-zinc-400 font-medium">{ing.action}</span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-
-                {prescription.avoid.length > 0 && (
-                    <div className="bg-rose-50 border border-rose-100 rounded-2xl p-5 flex items-start gap-4 tech-reveal delay-300">
-                        <Ban size={18} className="text-rose-500 mt-0.5 shrink-0" />
-                        <div>
-                            <span className="text-xs font-bold text-rose-700 block uppercase mb-1 tracking-wide">Ingredients to Avoid</span>
-                            <p className="text-xs text-rose-600 leading-tight font-medium">
-                                {prescription.avoid.join(', ')}
-                            </p>
-                        </div>
-                    </div>
-                )}
             </div>
         </div>
 
@@ -831,22 +805,51 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
              </div>
         </div>
 
+        {/* PRESCRIPTION PROTOCOL CARD */}
+        <div className="modern-card rounded-[2rem] p-8 animate-in slide-in-from-bottom-8 duration-700 delay-150">
+             <div className="mb-8">
+                <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                    <FlaskConical size={12} /> Prescribed Actives
+                </h4>
+                <div className="flex flex-wrap gap-2.5">
+                    {prescription.ingredients.map((ing, i) => (
+                        <div key={i} className={`bg-white border border-zinc-100 rounded-xl px-4 py-3 flex flex-col min-w-[100px] shadow-sm tech-reveal hover:border-teal-300 transition-colors cursor-default`} style={{ animationDelay: `${i * 100}ms` }}>
+                            <span className="text-xs font-bold text-zinc-900 mb-0.5">{ing.name}</span>
+                            <span className="text-[10px] text-zinc-400 font-medium">{ing.action}</span>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {prescription.avoid.length > 0 && (
+                <div className="bg-rose-50 border border-rose-100 rounded-2xl p-5 flex items-start gap-4 tech-reveal delay-300">
+                    <Ban size={18} className="text-rose-500 mt-0.5 shrink-0" />
+                    <div>
+                        <span className="text-xs font-bold text-rose-700 block uppercase mb-1 tracking-wide">Ingredients to Avoid</span>
+                        <p className="text-xs text-rose-600 leading-tight font-medium">
+                            {prescription.avoid.join(', ')}
+                        </p>
+                    </div>
+                </div>
+            )}
+        </div>
+
         <div className="space-y-6">
-             <GroupSection title="Blemishes" score={groupAnalysis.blemishScore} delayClass="delay-150">
+             <GroupSection title="Blemishes" score={groupAnalysis.blemishScore} delayClass="delay-200">
                  <MetricRing label="Acne" value={metrics.acneActive} metricKey="acneActive" onSelect={setSelectedMetric} />
                  <MetricRing label="Scars" value={metrics.acneScars} metricKey="acneScars" onSelect={setSelectedMetric} />
                  <MetricRing label="Pores" value={metrics.poreSize} metricKey="poreSize" onSelect={setSelectedMetric} />
                  <MetricRing label="Blackheads" value={metrics.blackheads} metricKey="blackheads" onSelect={setSelectedMetric} />
              </GroupSection>
 
-             <GroupSection title="Health" score={groupAnalysis.healthScore} delayClass="delay-200">
+             <GroupSection title="Health" score={groupAnalysis.healthScore} delayClass="delay-300">
                  <MetricRing label="Hydration" value={metrics.hydration} metricKey="hydration" onSelect={setSelectedMetric} />
                  <MetricRing label="Oil Ctrl" value={metrics.oiliness} metricKey="oiliness" onSelect={setSelectedMetric} />
                  <MetricRing label="Redness" value={metrics.redness} metricKey="redness" onSelect={setSelectedMetric} />
                  <MetricRing label="Texture" value={metrics.texture} metricKey="texture" onSelect={setSelectedMetric} />
              </GroupSection>
 
-             <GroupSection title="Aging" score={groupAnalysis.agingScore} delayClass="delay-300">
+             <GroupSection title="Aging" score={groupAnalysis.agingScore} delayClass="delay-500">
                  <MetricRing label="Fine Lines" value={metrics.wrinkleFine} metricKey="wrinkleFine" onSelect={setSelectedMetric} />
                  <MetricRing label="Wrinkles" value={metrics.wrinkleDeep} metricKey="wrinkleDeep" onSelect={setSelectedMetric} />
                  <MetricRing label="Firmness" value={metrics.sagging} metricKey="sagging" onSelect={setSelectedMetric} />
@@ -926,7 +929,6 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
                             <div className="flex-1">
                                 <div className="flex justify-between items-start mb-1">
                                     <h4 className="font-bold text-sm text-zinc-900">{treatment.name}</h4>
-                                    <span className="text-[9px] font-bold uppercase tracking-wide bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded">{treatment.matchScore}% Match</span>
                                 </div>
                                 <p className="text-xs text-zinc-500 font-medium mb-2 leading-relaxed">{treatment.benefit}</p>
                                 <div className="flex gap-3">
