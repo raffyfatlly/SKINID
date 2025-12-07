@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { UserProfile, AppView, Product, SkinMetrics, SkinType } from './types';
 import FaceScanner from './components/FaceScanner';
@@ -11,7 +10,7 @@ import SaveProfileModal from './components/SaveProfileModal';
 import ProfileSetup from './components/ProfileSetup';
 import AIAssistant from './components/AIAssistant';
 import { getBuyingDecision, auditProduct } from './services/geminiService';
-import { LayoutGrid, ScanBarcode, User, ChevronDown, Sparkles, X, Check, AlertOctagon, ShoppingBag, ArrowRightLeft, ThumbsUp, ThumbsDown, AlertTriangle, Trophy, Target, ShieldCheck, Zap, HelpCircle, BrainCircuit } from 'lucide-react';
+import { LayoutGrid, ScanBarcode, User, ChevronDown, Sparkles, X, Check, AlertOctagon, ShoppingBag, ArrowRightLeft, ThumbsUp, ThumbsDown, AlertTriangle, Trophy, Target, ShieldCheck, Zap, HelpCircle, BrainCircuit, FlaskConical, Ban } from 'lucide-react';
 
 // --- VISUAL HIGHLIGHT COMPONENT ---
 const PulseRing = ({ color = 'teal' }: { color?: 'teal' | 'indigo' }) => (
@@ -182,6 +181,12 @@ const App: React.FC = () => {
     setShelf(newShelf);
     localStorage.setItem('skinos_shelf_v2', JSON.stringify(newShelf));
   };
+  
+  const handleUpdateProduct = (updatedProduct: Product) => {
+    const newShelf = shelf.map(p => p.id === updatedProduct.id ? updatedProduct : p);
+    setShelf(newShelf);
+    localStorage.setItem('skinos_shelf_v2', JSON.stringify(newShelf));
+  };
 
   const handleSaveProfile = () => {
       if (user) {
@@ -237,6 +242,7 @@ const App: React.FC = () => {
                     products={shelf} 
                     onRemoveProduct={removeFromShelf} 
                     onScanNew={() => setView(AppView.PRODUCT_SCANNER)}
+                    onUpdateProduct={handleUpdateProduct}
                     userProfile={user}
                 />
             </div>
@@ -325,6 +331,7 @@ const App: React.FC = () => {
               case 'emerald': return { bg: 'bg-emerald-500', text: 'text-emerald-600', light: 'bg-emerald-50', border: 'border-emerald-100', icon: ShieldCheck };
               case 'rose': return { bg: 'bg-rose-500', text: 'text-rose-600', light: 'bg-rose-50', border: 'border-rose-100', icon: AlertTriangle };
               case 'amber': return { bg: 'bg-amber-500', text: 'text-amber-600', light: 'bg-amber-50', border: 'border-amber-100', icon: AlertOctagon };
+              case 'zinc': return { bg: 'bg-zinc-500', text: 'text-zinc-600', light: 'bg-zinc-100', border: 'border-zinc-200', icon: HelpCircle }; // Skip/Neutral
               default: return { bg: 'bg-zinc-500', text: 'text-zinc-500', light: 'bg-zinc-50', border: 'border-zinc-200', icon: HelpCircle };
           }
       }
@@ -337,7 +344,9 @@ const App: React.FC = () => {
           return scoreA - scoreB;
       });
 
-      const primaryBenefit = sortedBenefits[0];
+      // Score-based status logic (Strict)
+      const isLowScore = audit.adjustedScore < 50;
+      const isMediocre = audit.adjustedScore >= 50 && audit.adjustedScore < 70;
 
       return (
         <div className="fixed inset-0 z-50 flex flex-col bg-zinc-900/40 backdrop-blur-md animate-in slide-in-from-bottom-full duration-500">
@@ -371,13 +380,29 @@ const App: React.FC = () => {
                         </h3>
                         
                         <div className="space-y-3">
-                            {/* 1. SAFETY CHECK */}
+                            {/* 1. SAFETY CHECK (Strict) */}
                             {audit.warnings.length > 0 ? (
                                 <div className="flex items-start gap-3 p-3 bg-rose-50 border border-rose-100 rounded-xl">
                                     <AlertTriangle size={16} className="text-rose-500 shrink-0 mt-0.5" />
                                     <div>
-                                        <span className="text-xs font-bold text-rose-700 block mb-0.5">Skin Incompatibility</span>
+                                        <span className="text-xs font-bold text-rose-700 block mb-0.5">Safety Alert</span>
                                         <p className="text-xs text-rose-600 leading-snug">{audit.warnings[0].reason}</p>
+                                    </div>
+                                </div>
+                            ) : isLowScore ? (
+                                <div className="flex items-start gap-3 p-3 bg-rose-50 border border-rose-100 rounded-xl">
+                                    <Ban size={16} className="text-rose-500 shrink-0 mt-0.5" />
+                                    <div>
+                                        <span className="text-xs font-bold text-rose-700 block mb-0.5">Low Compatibility</span>
+                                        <p className="text-xs text-rose-600 leading-snug">{audit.analysisReason}</p>
+                                    </div>
+                                </div>
+                            ) : isMediocre ? (
+                                <div className="flex items-start gap-3 p-3 bg-amber-50 border border-amber-100 rounded-xl">
+                                    <AlertOctagon size={16} className="text-amber-500 shrink-0 mt-0.5" />
+                                    <div>
+                                        <span className="text-xs font-bold text-amber-700 block mb-0.5">Average Fit</span>
+                                        <p className="text-xs text-amber-600 leading-snug">{audit.analysisReason}</p>
                                     </div>
                                 </div>
                             ) : (
@@ -385,7 +410,7 @@ const App: React.FC = () => {
                                     <ShieldCheck size={16} className="text-emerald-500 shrink-0 mt-0.5" />
                                     <div>
                                         <span className="text-xs font-bold text-emerald-700 block mb-0.5">Biometric Match</span>
-                                        <p className="text-xs text-emerald-600 leading-snug">Safe for your skin type and current condition.</p>
+                                        <p className="text-xs text-emerald-600 leading-snug">{audit.analysisReason}</p>
                                     </div>
                                 </div>
                             )}
@@ -414,31 +439,60 @@ const App: React.FC = () => {
                                     </div>
                                 </div>
                             ) : null}
-
-                            {/* 3. KEY BENEFIT */}
-                            {audit.warnings.length === 0 && primaryBenefit && (
-                                <div className="flex items-start gap-3 p-3 bg-teal-50 border border-teal-100 rounded-xl">
-                                    <Target size={16} className="text-teal-500 shrink-0 mt-0.5" />
-                                    <div>
-                                        <span className="text-xs font-bold text-teal-700 block mb-0.5">Targets Priority</span>
-                                        <p className="text-xs text-teal-600 leading-snug">
-                                            Contains <span className="font-bold">{primaryBenefit.ingredient}</span> which addresses your <span className="font-bold">{primaryBenefit.target}</span> concern.
-                                        </p>
-                                    </div>
-                                </div>
-                            )}
                         </div>
                     </div>
 
-                    {/* INGREDIENTS SNEAK PEEK */}
+                    {/* FORMULA BREAKDOWN LIST (Merged Risks & Benefits) */}
                     <div>
-                        <h3 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-3">Detected Actives</h3>
-                        <div className="flex flex-wrap gap-2">
-                             {lastScannedProduct.ingredients.slice(0, 6).map((ing, i) => (
-                                 <span key={i} className="px-3 py-1.5 rounded-lg bg-zinc-50 border border-zinc-100 text-[10px] font-bold text-zinc-600 uppercase">
-                                     {ing}
-                                 </span>
+                        <h3 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                             <FlaskConical size={12} /> Formula Breakdown
+                        </h3>
+                        <div className="space-y-3">
+                             {/* Show Warnings First */}
+                             {audit.warnings.map((risk, i) => (
+                                 <div key={`r-${i}`} className="flex items-start gap-3 p-3 rounded-2xl bg-rose-50 border border-rose-100">
+                                     <AlertTriangle size={16} className="text-rose-500 shrink-0 mt-0.5" />
+                                     <div>
+                                         <span className="text-xs font-bold text-rose-900 block mb-0.5">Safety Warning</span>
+                                         <p className="text-xs text-zinc-600 leading-snug">{risk.reason}</p>
+                                     </div>
+                                 </div>
                              ))}
+
+                             {/* Show Top Ingredients & Impact */}
+                             {sortedBenefits.slice(0, 3).map((benefit, i) => {
+                                 // Determine if this benefit is actually useful based on user's score
+                                 const userScore = user.biometrics[benefit.target as keyof SkinMetrics] as number || 0;
+                                 const isRelevant = userScore < 70; // Only relevant if user actually needs help in this area
+                                 const isMismatch = isLowScore; // If product is a mismatch, benefits are theoretical
+
+                                 // Skip positive benefits for mismatched products to avoid confusion
+                                 if (isMismatch) return null;
+
+                                 return (
+                                     <div key={`b-${i}`} className="flex items-start gap-3 p-3 rounded-2xl bg-zinc-50 border border-zinc-100">
+                                         <Zap size={16} className={isRelevant ? "text-teal-500 shrink-0 mt-0.5" : "text-zinc-400 shrink-0 mt-0.5"} />
+                                         <div>
+                                             <div className="flex items-center gap-2 mb-0.5">
+                                                 <span className="text-xs font-bold text-zinc-900">{benefit.ingredient}</span>
+                                                 {isRelevant && (
+                                                     <span className="text-[9px] font-bold bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded uppercase">Helpful</span>
+                                                 )}
+                                             </div>
+                                             <p className="text-xs text-zinc-600 leading-snug">
+                                                 {benefit.description}
+                                             </p>
+                                         </div>
+                                     </div>
+                                 )
+                             })}
+                             
+                             {/* Fallback if list is empty due to mismatch filter */}
+                             {sortedBenefits.length > 0 && isLowScore && audit.warnings.length === 0 && (
+                                 <div className="p-3 rounded-2xl bg-zinc-50 border border-zinc-100 text-center">
+                                     <p className="text-xs text-zinc-400 italic">Beneficial ingredients not shown due to low overall compatibility.</p>
+                                 </div>
+                             )}
                         </div>
                     </div>
 

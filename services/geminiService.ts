@@ -97,19 +97,13 @@ const getFallbackProduct = (userMetrics?: SkinMetrics): Product => ({
     risks: [],
     benefits: [],
     suitabilityScore: 60,
-    estimatedPrice: 85, // RM
+    estimatedPrice: 45, // RM
     type: 'MOISTURIZER',
     dateScanned: Date.now()
 });
 
 // --- AI FUNCTIONS ---
 
-/**
- * Analyzes skin using a hybrid approach:
- * 1. Takes Local Computer Vision metrics (deterministic).
- * 2. Asks AI to validate or refine them (qualitative).
- * 3. Blends scores using a weighted average for consistency.
- */
 export const analyzeFaceSkin = async (imageBase64: string, localMetrics?: SkinMetrics): Promise<SkinMetrics> => {
     return runWithRetry(async (ai) => {
         // Construct a context string with the local deterministic data
@@ -181,9 +175,6 @@ export const analyzeFaceSkin = async (imageBase64: string, localMetrics?: SkinMe
         const aiData = JSON.parse(response.text || "{}");
         if (!aiData.overallScore) throw new Error("Invalid AI Response");
 
-        // HYBRID BLENDING LOGIC:
-        // We favor AI judgment (80%) because it understands context (Peeling vs Acne) better than CV.
-        // CV (20%) acts as a deterministic stabilizer to prevent wild hallucinations between frames.
         const blend = (local: number, ai: number) => Math.round((local * 0.20) + (ai * 0.80));
         
         const finalMetrics: SkinMetrics = localMetrics ? {
@@ -202,7 +193,7 @@ export const analyzeFaceSkin = async (imageBase64: string, localMetrics?: SkinMe
             hydration: blend(localMetrics.hydration, aiData.hydration),
             oiliness: blend(localMetrics.oiliness, aiData.oiliness),
             darkCircles: blend(localMetrics.darkCircles, aiData.darkCircles),
-            skinAge: aiData.skinAge || localMetrics.skinAge, // Prefer AI age if available
+            skinAge: aiData.skinAge || localMetrics.skinAge,
             timestamp: Date.now()
         } : { ...aiData, timestamp: Date.now() };
 
@@ -218,16 +209,23 @@ export const analyzeProductImage = async (imageBase64: string, userMetrics?: Ski
         if (userMetrics) {
             promptText = `
             Analyze this product image for a user with the following skin profile:
+            - Hydration: ${userMetrics.hydration} (0-40 is DRY, 40-60 is NORMAL, 60+ is HYDRATED)
+            - Oiliness: ${userMetrics.oiliness} (0-40 is OILY, 40-60 is NORMAL, 60+ is DRY)
             - Acne Score: ${userMetrics.acneActive} (Lower is worse)
-            - Hydration: ${userMetrics.hydration} (Lower is dry)
             - Sensitivity/Redness: ${userMetrics.redness} (Lower is sensitive)
-            - Aging Signs: ${userMetrics.wrinkleFine} (Lower is more wrinkles)
             
-            1. Extract Name, Brand, Type (CLEANSER, TONER, SERUM, MOISTURIZER, SPF, TREATMENT, FOUNDATION, CONCEALER, POWDER, PRIMER, SETTING_SPRAY, BLUSH, BRONZER), and Ingredients.
-            2. Estimate the "estimatedPrice" (average retail price in MYR / Malaysian Ringgit). Use Malaysian market context (Watsons MY, Sephora MY, Shopee Mall MY) for pricing. Return just the number (e.g. 50, not RM 50).
-            3. Calculate a 'suitabilityScore' (0-100) specifically for THIS user based on ingredients vs their profile.
-               - For COSMETICS (Foundation, etc): Check for comedogenic ingredients (pore clogging) if acne score is low. Check for irritants if sensitivity is high.
-            4. List specific Risks and Benefits for THIS user.
+            STRICT SCORING RUBRIC (Consistency is Key):
+            1. TYPE CLASSIFICATION: Infer the type (CLEANSER, ETC) based on keywords. "Face Wash" = CLEANSER. "Lotion" = MOISTURIZER. "Sunblock" = SPF.
+            2. DRY SKIN CONTRADICTION: If User Hydration < 45 AND product is "Matte", "Oil-Free", "Clay", "Foaming", or contains Alcohol Denat/Salicylic Acid -> Suitability Score MUST be < 50. Even if it helps acne, it is BAD for dry skin.
+            3. SENSITIVE SKIN CONTRADICTION: If User Redness < 50 AND product contains Fragrance, Essential Oils, or High % Acids -> Suitability Score MUST be < 55.
+            4. PERFECT MATCH: High score (>85) requires the product to specifically target the user's Weakest Metric without harming others.
+            
+            TASKS:
+            1. Extract Name, Brand, Type.
+            2. Estimate "estimatedPrice" in MYR (Malaysian Ringgit) based on retailers like Watsons, Sephora Malaysia, or Guardian.
+            3. Calculate 'suitabilityScore' (0-100) using the RUBRIC above.
+            4. List Risks and Benefits for THIS user.
+            
             Return JSON.
             `;
         }
@@ -285,17 +283,26 @@ export const analyzeProductImage = async (imageBase64: string, userMetrics?: Ski
         const finalScore = (typeof rawScore === 'number' && !isNaN(rawScore)) ? rawScore : 70;
         
         const validTypes = ['CLEANSER','TONER','SERUM','MOISTURIZER','SPF','TREATMENT','FOUNDATION','CONCEALER','POWDER','PRIMER','SETTING_SPRAY','BLUSH','BRONZER'];
+        // Strict type sanitation
+        let detectedType = (data.type || 'UNKNOWN').toUpperCase();
+        if (!validTypes.includes(detectedType)) {
+             // Heuristic fix for "Face Wash" -> "CLEANSER" etc.
+             if (detectedType.includes('WASH') || detectedType.includes('SOAP') || detectedType.includes('CLEANS') || detectedType.includes('BALM')) detectedType = 'CLEANSER';
+             else if (detectedType.includes('CREAM') || detectedType.includes('LOTION') || detectedType.includes('MOISTUR') || detectedType.includes('HYDRAT')) detectedType = 'MOISTURIZER';
+             else if (detectedType.includes('SCREEN') || detectedType.includes('BLOCK') || detectedType.includes('SUN') || detectedType.includes('SPF')) detectedType = 'SPF';
+             else detectedType = 'UNKNOWN';
+        }
 
         return {
             id: Math.random().toString(36).substr(2, 9),
             name: data.name || "Unknown Product",
             brand: data.brand || "Unknown Brand",
-            type: (validTypes.includes(data.type) ? data.type : 'UNKNOWN') as any,
+            type: (validTypes.includes(detectedType) ? detectedType : 'UNKNOWN') as any,
             ingredients: data.ingredients || [],
             risks: data.risks || [],
             benefits: data.benefits || [],
             suitabilityScore: finalScore,
-            estimatedPrice: data.estimatedPrice || 85,
+            estimatedPrice: data.estimatedPrice || 45,
             dateScanned: Date.now()
         };
     }, getFallbackProduct(userMetrics));
@@ -408,8 +415,27 @@ export const auditProduct = (product: Product, userProfile: UserProfile) => {
     const warnings: { reason: string; severity: 'HIGH' | 'MEDIUM' }[] = [];
     const ing = product.ingredients.map(i => i.toLowerCase()).join(' ');
     const isMakeup = ['FOUNDATION', 'CONCEALER', 'POWDER', 'PRIMER', 'BLUSH', 'BRONZER'].includes(product.type);
-    
-    // Sensitivity Check
+    const pName = product.name.toLowerCase();
+
+    // 1. Dry Skin Logic (The logic user specifically asked for)
+    if (metrics.hydration < 50) {
+        if (ing.includes('alcohol denat')) {
+            warnings.push({ reason: "High alcohol content will worsen dryness.", severity: 'HIGH' });
+        }
+        if (ing.includes('clay') || pName.includes('clay') || pName.includes('matte') || pName.includes('oil-free')) {
+            // Contextual check: Is it actually an oil-free moisturizer? 
+            if (product.type === 'MOISTURIZER' && (pName.includes('gel') || pName.includes('matte'))) {
+                warnings.push({ reason: "Gel/Matte formulas are often too light for your dry skin.", severity: 'MEDIUM' });
+            } else if (pName.includes('clay')) {
+                warnings.push({ reason: "Clay products deplete moisture from dry skin.", severity: 'HIGH' });
+            }
+        }
+        if (product.type === 'CLEANSER' && (pName.includes('foam') || ing.includes('sodium lauryl sulfate'))) {
+             warnings.push({ reason: "Foaming cleansers can strip dry skin barriers.", severity: 'MEDIUM' });
+        }
+    }
+
+    // 2. Sensitivity Check
     if (metrics.redness < 60) {
         if (ing.includes('retinol') || ing.includes('glycolic')) warnings.push({ reason: "Potentially too harsh for sensitive skin.", severity: 'HIGH' });
         if (ing.includes('fragrance') || ing.includes('parfum')) warnings.push({ reason: "Contains fragrance which may irritate.", severity: 'MEDIUM' });
@@ -417,7 +443,8 @@ export const auditProduct = (product: Product, userProfile: UserProfile) => {
              warnings.push({ reason: "Contains common makeup irritants for sensitive skin.", severity: 'MEDIUM' });
         }
     }
-    // Acne Check
+
+    // 3. Acne Check
     if (metrics.acneActive < 60) {
         if (ing.includes('coconut oil') || ing.includes('shea butter') || ing.includes('isopropyl myristate') || ing.includes('ethylhexyl palmitate')) {
              warnings.push({ reason: "Potential pore-clogging ingredients detected.", severity: 'MEDIUM' });
@@ -428,14 +455,96 @@ export const auditProduct = (product: Product, userProfile: UserProfile) => {
     }
 
     let adjustedScore = product.suitabilityScore;
-    if (warnings.length > 0) adjustedScore -= (warnings.length * 15);
     
-    // Benefit Boost
-    const prescription = getClinicalPrescription(userProfile);
-    const matches = prescription.prescribedActives.filter(a => ing.includes(a.toLowerCase()));
-    if (matches.length > 0) adjustedScore += 10;
+    // HEAVY DETERMINISTIC PENALTY
+    if (warnings.length > 0) {
+        // Force score down significantly if warnings exist
+        const highRisks = warnings.filter(w => w.severity === 'HIGH').length;
+        const mediumRisks = warnings.filter(w => w.severity === 'MEDIUM').length;
+        
+        const penalty = (highRisks * 30) + (mediumRisks * 15);
+        adjustedScore = Math.min(adjustedScore, 100 - penalty);
+        
+        // Cap max score for risky products
+        if (highRisks > 0) adjustedScore = Math.min(adjustedScore, 45);
+        else if (mediumRisks > 0) adjustedScore = Math.min(adjustedScore, 65);
+    }
+    
+    // NEW: Analysis Reason Logic (Explains low scores even without warnings)
+    let analysisReason = "";
+    
+    // Find the single lowest metric to use as the primary "reason"
+    const displayNames: Record<string, string> = {
+        'acneActive': 'Active Acne',
+        'hydration': 'Hydration',
+        'redness': 'Sensitivity',
+        'wrinkleFine': 'Aging Signs',
+        'pigmentation': 'Pigmentation',
+        'oiliness': 'Oil Control',
+        'poreSize': 'Pore Care'
+    };
 
-    return { warnings, adjustedScore: Math.min(100, Math.max(10, adjustedScore)) };
+    const lowestMetricEntry = Object.entries(userProfile.biometrics)
+        .filter(([k, v]) => typeof v === 'number' && displayNames[k])
+        .sort((a, b) => (a[1] as number) - (b[1] as number))[0];
+
+    const metricKey = lowestMetricEntry ? lowestMetricEntry[0] : 'overallScore';
+    const metricName = displayNames[metricKey] || 'Skin Health';
+    const metricScore = lowestMetricEntry ? lowestMetricEntry[1] : 70;
+
+    // INGREDIENT CHECKER: Does the product actually contain help for the lowest metric?
+    const helpfulIngredientsMap: Record<string, string[]> = {
+        'hydration': ['glycerin', 'hyaluronic', 'ceramide', 'panthenol', 'squalane', 'aloe', 'urea', 'lactic'],
+        'acneActive': ['salicylic', 'benzoyl', 'tea tree', 'niacinamide', 'sulfur', 'clay', 'willow bark'],
+        'redness': ['centella', 'panthenol', 'aloe', 'chamomile', 'green tea', 'allantoin', 'bisabolol', 'oat'],
+        'wrinkleFine': ['retinol', 'peptide', 'vitamin c', 'glycolic', 'hyaluronic', 'bakuchiol'],
+        'oiliness': ['niacinamide', 'clay', 'salicylic', 'zinc', 'dimethicone', 'charcoal'],
+        'pigmentation': ['vitamin c', 'niacinamide', 'tranexamic', 'azelaic', 'licorice', 'alpha arbutin', 'kojic']
+    };
+
+    const targetIngredients = helpfulIngredientsMap[metricKey] || [];
+    const matchedIngredients = product.ingredients.filter(ing => 
+        targetIngredients.some(target => ing.toLowerCase().includes(target))
+    );
+    const hasTargetIngredient = matchedIngredients.length > 0;
+
+    // Benefit Boost (Only if safe)
+    if (warnings.length === 0) {
+        const prescription = getClinicalPrescription(userProfile);
+        const matches = prescription.prescribedActives.filter(a => ing.includes(a.toLowerCase()));
+        
+        // Boost if matches prescription OR if it has supportive ingredients for lowest metric
+        if (matches.length > 0) adjustedScore += 10;
+        else if (hasTargetIngredient) adjustedScore += 15; // Supportive boost (e.g. Glycerin for Dry Skin)
+    }
+
+    if (warnings.length > 0) {
+        analysisReason = warnings[0].reason;
+    } else if (adjustedScore < 60) {
+        if (hasTargetIngredient) {
+            const ingredientName = matchedIngredients[0].charAt(0).toUpperCase() + matchedIngredients[0].slice(1);
+            // Educational override for wash-off products
+            if (product.type === 'CLEANSER' && ['hydration', 'wrinkleFine', 'pigmentation', 'wrinkleDeep', 'sagging'].includes(metricKey)) {
+                analysisReason = `Contains ${ingredientName}, but cleansers are wash-off. You need a leave-on product to effectively treat ${metricName}.`;
+            } else {
+                analysisReason = `Contains ${ingredientName}, but the overall concentration or formulation appears weak for your ${metricName} needs.`;
+            }
+        } else {
+            // Safe but useless
+            analysisReason = `Your priority is ${metricName} (Score ${metricScore}), but this formula lacks specific actives to improve it.`;
+        }
+    } else if (adjustedScore < 75) {
+        // Safe but average
+        if (hasTargetIngredient) {
+            analysisReason = `Contains ${matchedIngredients[0]}, helpful for your ${metricName}. Good for maintenance.`;
+        } else {
+            analysisReason = `Suitable for maintenance, but not potent enough to significantly treat your ${metricName}.`;
+        }
+    } else {
+        analysisReason = "Formula composition aligns well with your skin profile.";
+    }
+
+    return { warnings, adjustedScore: Math.min(100, Math.max(10, adjustedScore)), analysisReason };
 };
 
 // --- ADVANCED SHELF ANALYSIS ---
@@ -445,6 +554,7 @@ export const analyzeShelfHealth = (products: Product[], userProfile: UserProfile
         riskyProducts: [] as { name: string, reason: string }[],
         conflicts: [] as string[],
         missing: [] as string[],
+        upgrades: [] as string[], // New category for existing but low-quality items
         redundancies: [] as string[],
         synergies: [] as string[],
         balance: {
@@ -512,15 +622,59 @@ export const analyzeShelfHealth = (products: Product[], userProfile: UserProfile
         }
     }
 
-    const types = products.map(p => p.type);
-    if (!types.includes('CLEANSER')) analysis.missing.push("Cleanser");
-    if (!types.includes('MOISTURIZER')) analysis.missing.push("Moisturizer");
-    if (!types.includes('SPF')) analysis.missing.push("Sunscreen");
+    // CHECK ESSENTIALS: Missing vs Upgrade vs Redundant
+    const checkStep = (type: string, name: string) => {
+        const items = products.filter(p => p.type === type);
+        
+        if (items.length === 0) {
+            analysis.missing.push(name);
+        } else {
+            // Check quality of existing
+            // CHANGE: Lowered threshold to 50 to avoid nagging about decent products
+            // CHANGE: Updated threshold to 60 based on feedback to be more proactive with "Change"
+            const lowQuality = items.filter(p => auditProduct(p, userProfile).adjustedScore < 60);
+            if (lowQuality.length === items.length) {
+                // All items of this type are low score
+                analysis.upgrades.push(name);
+            }
+
+            // Check redundancies
+            if (items.length > 1) {
+                if (type === 'CLEANSER') {
+                    // Double Cleanse Logic
+                    const oils = items.filter(p => {
+                         const n = p.name.toLowerCase();
+                         return n.includes('oil') || n.includes('balm') || n.includes('micellar') || n.includes('melting') || p.ingredients.some(i => i.toLowerCase().includes('oil'));
+                    });
+                    const waters = items.filter(p => !oils.includes(p));
+
+                    // Valid Double Cleanse: 1 Oil-based + 1 Water-based (Total 2)
+                    const isDoubleCleanse = (oils.length === 1 && waters.length === 1 && items.length === 2);
+                    
+                    if (!isDoubleCleanse) {
+                         if (items.length > 2) analysis.redundancies.push(`${items.length} Cleansers (Keep 1 or 2 for Double Cleanse)`);
+                         else if (oils.length > 1) analysis.redundancies.push("Multiple Oil Cleansers");
+                         else if (waters.length > 1) analysis.redundancies.push("Multiple Water Cleansers");
+                         else analysis.redundancies.push("Duplicate Cleanser");
+                    }
+                } else if (type === 'MOISTURIZER' && items.length > 1) {
+                    analysis.redundancies.push("Multiple Moisturizers");
+                } else if (type === 'SPF' && items.length > 2) {
+                     if (items.length > 2) analysis.redundancies.push("Multiple Sunscreens");
+                }
+            }
+        }
+    };
+
+    checkStep('CLEANSER', 'Cleanser');
+    checkStep('MOISTURIZER', 'Moisturizer');
+    checkStep('SPF', 'Sunscreen');
 
     let score = 100;
     score -= analysis.riskyProducts.length * 15;
     score -= analysis.conflicts.length * 20;
     score -= analysis.missing.length * 10;
+    score -= analysis.upgrades.length * 5; // Penalty for low quality essentials
     
     if (userProfile.biometrics.redness < 60 && exfoliantCount > 1) {
         score -= 20;
@@ -530,21 +684,28 @@ export const analyzeShelfHealth = (products: Product[], userProfile: UserProfile
         score -= 20;
         analysis.criticalInsight = "Severe lack of hydration for dry skin type.";
     }
-    else if (analysis.missing.length === 0 && analysis.conflicts.length === 0) {
+    else if (analysis.missing.length === 0 && analysis.conflicts.length === 0 && analysis.upgrades.length === 0) {
         analysis.criticalInsight = "Excellent routine balance and coverage.";
     }
     else if (analysis.conflicts.length > 0) {
         analysis.criticalInsight = "Chemical conflicts detected. Separate actives to AM/PM.";
     } else if (analysis.missing.length > 0) {
         analysis.criticalInsight = `Incomplete routine. Missing ${analysis.missing[0]}.`;
+    } else if (analysis.upgrades.length > 0) {
+        analysis.criticalInsight = `Routine complete, but your ${analysis.upgrades[0].toLowerCase()} is low quality.`;
     } else {
         analysis.criticalInsight = "Solid foundation, consider targeting specific concerns.";
     }
 
     score = Math.max(0, Math.min(100, score));
 
-    if (score >= 90) analysis.grade = 'S';
-    else if (score >= 80) analysis.grade = 'A';
+    // Cap score if essential items are missing (cannot be A or S)
+    if (analysis.missing.length > 0 && score > 79) {
+        score = 79;
+    }
+
+    if (score >= 95 && analysis.missing.length === 0 && analysis.riskyProducts.length === 0 && analysis.upgrades.length === 0) analysis.grade = 'S';
+    else if (score >= 80 && analysis.missing.length === 0) analysis.grade = 'A';
     else if (score >= 70) analysis.grade = 'B';
     else if (score >= 50) analysis.grade = 'C';
     else analysis.grade = 'D';
@@ -595,32 +756,47 @@ export const getBuyingDecision = (product: Product, shelf: Product[], user: User
         }
     }
 
+    // STRICT VERDICT LOGIC
     let verdict = { 
         decision: 'BUY', 
-        title: 'Great Addition', 
-        description: 'This product fits your needs well.', 
+        title: 'Great Match', 
+        description: 'Excellent fit for your skin metrics.', 
         color: 'emerald' 
     };
 
-    if (isRisky) {
+    if (audit.adjustedScore < 50) {
         verdict = { 
             decision: 'AVOID', 
-            title: 'Not Recommended', 
-            description: 'Contains ingredients that may conflict with your skin profile.', 
+            title: 'Mismatch', 
+            description: audit.analysisReason, 
+            color: 'rose' 
+        };
+    } else if (audit.adjustedScore < 70) {
+         verdict = { 
+            decision: 'SKIP', 
+            title: 'Low Efficiency', 
+            description: audit.analysisReason, 
+            color: 'zinc' 
+        };
+    } else if (isRisky) {
+        verdict = { 
+            decision: 'AVOID', 
+            title: 'Ingredient Risk', 
+            description: 'Contains ingredients that may irritate your skin.', 
             color: 'rose' 
         };
     } else if (shelfConflicts.length > 0) {
         verdict = { 
             decision: 'CAUTION', 
             title: 'Routine Conflict', 
-            description: 'Safe to use, but conflicts with other products in your routine.', 
+            description: 'Conflicts with items already on your shelf.', 
             color: 'amber' 
         };
     } else if (isRedundant) {
         if (comparison.result === 'BETTER') {
             verdict = { 
                 decision: 'SWAP', 
-                title: 'Upgrade Opportunity', 
+                title: 'Upgrade', 
                 description: `Better match than your current ${product.type.toLowerCase()}.`, 
                 color: 'emerald' 
             };
@@ -628,13 +804,13 @@ export const getBuyingDecision = (product: Product, shelf: Product[], user: User
             verdict = { 
                 decision: 'SKIP', 
                 title: 'Downgrade', 
-                description: `Your current ${product.type.toLowerCase()} works better for you.`, 
+                description: `Your current ${product.type.toLowerCase()} works better.`, 
                 color: 'zinc' 
             };
         } else {
              verdict = { 
                 decision: 'COMPARE', 
-                title: 'Similar Match', 
+                title: 'Duplicate', 
                 description: `Performs similarly to your current products.`, 
                 color: 'zinc' 
             };

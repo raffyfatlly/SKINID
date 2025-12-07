@@ -224,6 +224,7 @@ interface RoutineRecommendation {
     formulation: string;
     vehicle: string;
     actionType: string;
+    isFallback: boolean;
 }
 
 const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[]; onRescan: () => void; onConsultAI: (query: string) => void; }> = ({ userProfile, shelf, onRescan, onConsultAI }) => {
@@ -452,19 +453,19 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
     const usedIngredients = new Set<string>();
 
     const vehicleMap: Record<string, string[]> = {
-        'CLEANSER': ['Salicylic Acid', 'Benzoyl Peroxide', 'Glycolic Acid', 'Lactic Acid', 'BHA', 'AHA', 'Tea Tree', 'Oat', 'Centella', 'Willow Bark', 'Sulfur'],
-        'TONER': ['Glycolic Acid', 'Salicylic Acid', 'Lactic Acid', 'BHA', 'AHA', 'Centella', 'Green Tea', 'Hyaluronic Acid', 'PHA', 'Willow Bark'],
-        'SERUM': ['Retinol', 'Retinal', 'Vitamin C', 'Niacinamide', 'Tranexamic Acid', 'Alpha Arbutin', 'Peptides', 'Copper Peptides', 'Azelaic Acid', 'Hyaluronic Acid', 'Growth Factors', 'Bakuchiol', 'Magnesium Ascorbyl Phosphate'],
-        'MOISTURIZER': ['Ceramides', 'Urea', 'Peptides', 'Centella', 'Panthenol', 'Squalane', 'Hyaluronic Acid', 'Retinol', 'Niacinamide', 'Salicylic Acid', 'Vitamin C', 'Azelaic Acid', 'Bakuchiol'],
-        'SPF': ['Zinc Oxide', 'Titanium Dioxide', 'Vitamin C', 'Niacinamide', 'Ceramides'],
+        'CLEANSER': ['Salicylic Acid', 'Benzoyl Peroxide', 'Glycolic Acid', 'Lactic Acid', 'BHA', 'AHA', 'Tea Tree', 'Oat', 'Centella', 'Willow Bark', 'Sulfur', 'Panthenol', 'Niacinamide', 'Ceramides', 'Green Tea', 'Zinc'],
+        'TONER': ['Glycolic Acid', 'Salicylic Acid', 'Lactic Acid', 'BHA', 'AHA', 'Centella', 'Green Tea', 'Hyaluronic Acid', 'PHA', 'Willow Bark', 'Panthenol', 'Niacinamide'],
+        'SERUM': ['Retinol', 'Retinal', 'Vitamin C', 'Niacinamide', 'Tranexamic Acid', 'Alpha Arbutin', 'Peptides', 'Copper Peptides', 'Azelaic Acid', 'Hyaluronic Acid', 'Growth Factors', 'Bakuchiol', 'Magnesium Ascorbyl Phosphate', 'Centella', 'Panthenol', 'Polyglutamic Acid'],
+        'MOISTURIZER': ['Ceramides', 'Urea', 'Peptides', 'Centella', 'Panthenol', 'Squalane', 'Hyaluronic Acid', 'Retinol', 'Niacinamide', 'Salicylic Acid', 'Vitamin C', 'Azelaic Acid', 'Bakuchiol', 'Green Tea', 'Oat'],
+        'SPF': ['Zinc Oxide', 'Titanium Dioxide', 'Vitamin C', 'Niacinamide', 'Ceramides', 'Hyaluronic Acid', 'Centella'],
         'TREATMENT': ['Benzoyl Peroxide', 'Salicylic Acid', 'Adapalene', 'Azelaic Acid', 'Retinol', 'Tretinoin', 'Sulfur', 'Willow Bark']
     };
 
     const supportiveIngredients: Record<string, string[]> = {
-        'CLEANSER': ['Glycerin', 'Prebiotics', 'Panthenol'],
+        'CLEANSER': ['Glycerin', 'Prebiotics', 'Panthenol', 'Oat', 'Green Tea'],
         'TONER': ['Hyaluronic Acid', 'Rose Water', 'Chamomile'],
         'SERUM': ['Peptides', 'Ceramides', 'Vitamin E'],
-        'MOISTURIZER': ['Squalane', 'Shea Butter', 'Allantoin'],
+        'MOISTURIZER': ['Squalane', 'Shea Butter', 'Allantoin', 'Ceramides'],
         'SPF': ['Antioxidants', 'Aloe Vera'],
         'TREATMENT': ['Sulfur', 'Zinc']
     };
@@ -560,7 +561,8 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
                 vehicle: slot.type,
                 formulation: formulation,
                 benefit: `Goal: ${primary.action.replace(/\.$/, '')}`,
-                actionType: slot.type === 'CLEANSER' ? 'Wash-off Active' : 'Leave-on Active'
+                actionType: slot.type === 'CLEANSER' ? 'Wash-off Active' : 'Leave-on Active',
+                isFallback: false
             };
         } else {
             let fallbackBenefit = "Maintenance";
@@ -570,10 +572,14 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
                 const isOily = metrics.oiliness < 50;
                 fallbackBenefit = isOily ? 'Oil Control' : 'Gentle Cleansing';
                 if (isOily) fallbackIngs = ['Tea Tree', 'Clay']; 
+                else if (metrics.hydration < 55) fallbackIngs = ['Glycerin', 'Oat']; // Specific for dry skin
             }
             else if (slot.type === 'TONER') fallbackBenefit = 'pH Balance';
             else if (slot.type === 'SERUM') fallbackBenefit = slot.time === 'AM' ? 'Antioxidant Protection' : 'Repair & Recovery';
-            else if (slot.type === 'MOISTURIZER') fallbackBenefit = 'Barrier Support';
+            else if (slot.type === 'MOISTURIZER') {
+                fallbackBenefit = 'Barrier Support';
+                if (metrics.hydration < 50) fallbackIngs = ['Ceramides', 'Squalane'];
+            }
             else if (slot.type === 'SPF') fallbackBenefit = 'UV Defense';
             else if (slot.type === 'TREATMENT') fallbackBenefit = 'Targeted Correction';
 
@@ -582,7 +588,8 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
                 vehicle: slot.type,
                 formulation: formulation,
                 benefit: fallbackBenefit,
-                actionType: 'Essential Step'
+                actionType: 'Key Ingredient', // Updated label from 'Essential Base'
+                isFallback: true
             };
         }
     });
@@ -618,7 +625,7 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
   const RoutineStep = ({ step, type, time }: { step: string, type: string, time: 'AM' | 'PM' }) => {
       const match = findBestMatch(type, step);
       const planKey = `${type}_${time}`;
-      const rec = routinePlan[planKey] || { ingredients: ['Recommended'], vehicle: type, formulation: 'Standard', benefit: 'Care', actionType: 'Standard' };
+      const rec = routinePlan[planKey] || { ingredients: ['Recommended'], vehicle: type, formulation: 'Standard', benefit: 'Care', actionType: 'Standard', isFallback: true };
 
       return (
           <div className="modern-card rounded-[1.5rem] p-6 relative transition-all hover:scale-[1.01] hover:-translate-y-1 hover:shadow-xl duration-300 animate-in slide-in-from-bottom-2 group cursor-default">
@@ -666,12 +673,14 @@ const SkinAnalysisReport: React.FC<{ userProfile: UserProfile; shelf: Product[];
                        </div>
                        
                        <div className="grid grid-cols-2 gap-4 mb-4">
+                           {/* Key Active Section - Now Shows Supportive Ingredients even if Fallback */}
                            <div className="tech-reveal delay-100">
-                               <span className="text-[9px] font-bold text-zinc-400 uppercase block mb-1">Key Active</span>
+                               <span className="text-[9px] font-bold text-zinc-400 uppercase block mb-1">Key Ingredient</span>
                                <div className="text-sm font-black text-zinc-900 tracking-tight flex items-center gap-2">
                                    {rec.ingredients[0]}
                                </div>
                            </div>
+
                            <div className="tech-reveal delay-200">
                                <span className="text-[9px] font-bold text-zinc-400 uppercase block mb-1">Recommended Formula</span>
                                <div className="text-sm font-bold text-zinc-700 tracking-tight flex items-center gap-2">
